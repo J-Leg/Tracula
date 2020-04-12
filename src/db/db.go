@@ -167,7 +167,7 @@ func GetAppList() []AppRef {
 
 // InsertDaily : Insert daily metric
 func InsertDaily(newDaily *stats.DailyMetric, app *AppRef) error {
-	log.Printf("Storing app ID: %d to DB\n", app.Ref.DomainID)
+	log.Printf("[PlayerCount Collection] storing %+v to DB for app %d", *newDaily, app.Ref.DomainID)
 
 	match := bson.M{"_id": app.Ref.ID}
 	action := bson.M{"$push": bson.M{"daily_metrics": newDaily}}
