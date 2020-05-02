@@ -10,6 +10,7 @@ import (
 	"log"
 	"playercount/src/env"
 	"playercount/src/stats" // Way to clear this?
+	"sort"
 	"time"
 )
 
@@ -32,10 +33,10 @@ type App struct {
 // Metric element
 type Metric struct {
 	Date        time.Time `bson:"date"`
-	AvgPlayers  int       `bson:"avg_players"`
+	AvgPlayers  int       `bson:"avgplayers"`
 	Gain        string    `bson:"gain"`
-	GainPercent string    `bson:"gain_percent"`
-	Peak        int       `bson:"peak_players"`
+	GainPercent string    `bson:"gainpercent"`
+	Peak        int       `bson:"peak"`
 }
 
 type dbParams struct {
@@ -68,12 +69,12 @@ func initEnvironmentParams() dbParams {
 	}
 
 	// Dependent environemnt params
-	if env.GoDotEnvVariable("NODE_ENV") == "dev" {
-		newDb = newClient.Database("games_stats_app_TST")
-		fmt.Printf("Target: TST DB\n")
-	} else {
+	if env.GoDotEnvVariable("NODE_ENV") == "prd" {
 		newDb = newClient.Database("games_stats_app")
 		fmt.Printf("Target: PRD DB\n")
+	} else {
+		newDb = newClient.Database("games_stats_app_TST")
+		fmt.Printf("Target: TST DB\n")
 	}
 
 	// Independent environment params
@@ -117,8 +118,8 @@ type AppRef struct {
 // GetAppList : Get List of Apps as AppMeta
 func GetAppList() []AppRef {
 
-	// Empty filter - searching for all elements
-	filter := bson.M{}
+	// Empty match - searching for all elements
+	match := bson.M{}
 
 	var cursor *mongo.Cursor
 
@@ -133,7 +134,7 @@ func GetAppList() []AppRef {
 	// Query options
 	// Only want fields corresponding to dbAppRef
 	opts := options.Find().SetProjection(proj)
-	cursor, err := cols.stats.Find(param.ctx, filter, opts)
+	cursor, err := cols.stats.Find(param.ctx, match, opts)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -166,16 +167,16 @@ func GetAppList() []AppRef {
 }
 
 // InsertDaily : Insert daily metric
-func InsertDaily(newDaily *stats.DailyMetric, app *AppRef) error {
-	log.Printf("[PlayerCount Collection] storing %+v to DB for app %d", *newDaily, app.Ref.DomainID)
+func InsertDaily(id primitive.ObjectID, newDaily *stats.DailyMetric) error {
+	log.Printf("[PlayerCount Collection] inserting new daily for app %s", id.String())
 
-	match := bson.M{"_id": app.Ref.ID}
+	match := bson.M{"_id": id}
 	action := bson.M{"$push": bson.M{"daily_metrics": newDaily}}
 	_, err := cols.stats.UpdateOne(param.ctx, match, action)
 	if err != nil {
 		return err
 	}
-	log.Println("[PlayerCount Collection] new daily metric successfully inserted")
+	log.Println("[PlayerCount Collection] daily insertion success.")
 	return nil
 }
 
@@ -192,6 +193,98 @@ func InsertException(app *AppRef) error {
 	return nil
 }
 
+// InsertMonthly : Insert new month instance
+func InsertMonthly(id primitive.ObjectID, newMonthly *Metric) error {
+	log.Printf("[PlayerCount Collection] inserting new monthly for app %s.\n", id.String())
+
+	match := bson.M{"_id": id}
+	action := bson.M{"$push": bson.M{"metrics": newMonthly}}
+	_, err := cols.stats.UpdateOne(param.ctx, match, action)
+	if err != nil {
+		return err
+	}
+	log.Println("[PlayerCount Collection] monthly insertion success.")
+	return nil
+}
+
+func updateMonthlyMetricList(id primitive.ObjectID, newMetricList *[]Metric) error {
+	log.Printf("[PlayerCount Collection] inserting new monthly metric list for app %s.\n", id.String())
+
+	match := bson.M{"_id": id}
+	action := bson.M{"$set": bson.M{"metrics": *newMetricList}}
+	_, err := cols.stats.UpdateOne(param.ctx, match, action)
+	if err != nil {
+		return err
+	}
+	log.Println("[PlayerCount Collection] monthly set success.")
+	return nil
+}
+
+// GetPreviousMonthMetric : retrieve previous month's metrics
+func GetPreviousMonthMetric(id primitive.ObjectID) (*Metric, error) {
+	log.Printf("[PlayerCount Collection] retrieving last month metrics for app %s.\n", id.String())
+
+	var app App
+	match := bson.M{"_id": id}
+	err := cols.stats.FindOne(param.ctx, match).Decode(&app)
+	if err != nil {
+		log.Printf("Error retrieving document from DB: %s\n", err)
+		if err == mongo.ErrNoDocuments {
+			log.Printf("ID %s does not exist in stats DB.\n", id.String())
+		}
+		return nil, err
+	}
+
+	monthlyMetricList := app.Metrics
+	sortDate(&monthlyMetricList)
+	updateMonthlyMetricList(id, &monthlyMetricList)
+
+	if len(monthlyMetricList) == 0 {
+		log.Printf("ID %s has empty monthly metric list", id.String())
+		return nil, nil
+	}
+
+	return &(monthlyMetricList[len(monthlyMetricList)-1]), nil
+}
+
+// GetDailyMetricList : Fetch all daily metrics
+func GetDailyMetricList(id primitive.ObjectID) (*[]stats.DailyMetric, error) {
+	log.Printf("Retrieving daily metric list for app %s.\n", id.String())
+	var result App
+
+	match := bson.M{"_id": id}
+	err := cols.stats.FindOne(param.ctx, match).Decode(&result)
+	if err != nil {
+		log.Printf("Error retrieving document from DB: %s\n", err)
+		if err == mongo.ErrNoDocuments {
+			log.Printf("ID %s does not exist in stats DB.\n", id.String())
+		}
+		return nil, err
+	}
+
+	return &result.DailyMetrics, nil
+}
+
+// UpdateDailyMetricList : Update daily metric list for app
+func UpdateDailyMetricList(id primitive.ObjectID, newMetricList *[]stats.DailyMetric) error {
+	log.Printf("Retrieving daily metric list for app %s.\n", id.String())
+	var updatedDoc App
+
+	match := bson.M{"_id": id}
+	action := bson.M{"$set": bson.M{"daily_metrics": *newMetricList}}
+
+	err := cols.stats.FindOneAndUpdate(param.ctx, match, action).Decode(&updatedDoc)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			log.Printf("ID %s does not exist in stats DB.\n", id.String())
+		}
+		return err
+	}
+
+	log.Printf("Successfully updated daily metric list for app ID %s.\n", id.String())
+	return nil
+}
+
 // GetExceptions - Return list of AppRefs and clear collection
 func GetExceptions() (*[]AppRef, error) {
 	var appRefs []AppRef
@@ -204,8 +297,25 @@ func GetExceptions() (*[]AppRef, error) {
 
 	if err = cursor.All(param.ctx, &appRefs); err != nil {
 		log.Printf("Error assembling excpetions. %s", err)
+		cursor.Close(param.ctx)
 		return nil, err
 	}
 
+	cursor.Close(param.ctx)
 	return &appRefs, nil
+}
+
+func sortDate(listPtr *[]Metric) {
+	list := *listPtr
+	if sort.SliceIsSorted(list, func(i int, j int) bool {
+		return list[i].Date.Before(list[j].Date)
+	}) {
+		return
+	}
+
+	log.Println("Unsorted monthly metrics. Sort it!")
+
+	sort.Slice(list, func(i int, j int) bool {
+		return list[i].Date.Before(list[j].Date)
+	})
 }
