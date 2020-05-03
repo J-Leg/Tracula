@@ -207,7 +207,8 @@ func InsertMonthly(id primitive.ObjectID, newMonthly *Metric) error {
 	return nil
 }
 
-func updateMonthlyMetricList(id primitive.ObjectID, newMetricList *[]Metric) error {
+// UpdateMonthlyMetricList : update list
+func UpdateMonthlyMetricList(id primitive.ObjectID, newMetricList *[]Metric) error {
 	log.Printf("[PlayerCount Collection] inserting new monthly metric list for app %s.\n", id.String())
 
 	match := bson.M{"_id": id}
@@ -220,8 +221,8 @@ func updateMonthlyMetricList(id primitive.ObjectID, newMetricList *[]Metric) err
 	return nil
 }
 
-// GetPreviousMonthMetric : retrieve previous month's metrics
-func GetPreviousMonthMetric(id primitive.ObjectID) (*Metric, error) {
+// GetMonthMetricList : retrieve previous month's metrics
+func GetMonthMetricList(id primitive.ObjectID) (*[]Metric, error) {
 	log.Printf("[PlayerCount Collection] retrieving last month metrics for app %s.\n", id.String())
 
 	var app App
@@ -236,15 +237,13 @@ func GetPreviousMonthMetric(id primitive.ObjectID) (*Metric, error) {
 	}
 
 	monthlyMetricList := app.Metrics
-	sortDate(&monthlyMetricList)
-	updateMonthlyMetricList(id, &monthlyMetricList)
-
 	if len(monthlyMetricList) == 0 {
 		log.Printf("ID %s has empty monthly metric list", id.String())
 		return nil, nil
 	}
 
-	return &(monthlyMetricList[len(monthlyMetricList)-1]), nil
+	monthSort(&monthlyMetricList)
+	return &monthlyMetricList, nil
 }
 
 // GetDailyMetricList : Fetch all daily metrics
@@ -305,7 +304,19 @@ func GetExceptions() (*[]AppRef, error) {
 	return &appRefs, nil
 }
 
-func sortDate(listPtr *[]Metric) {
+// FlushExceptions :
+func FlushExceptions() {
+	res, err := cols.exceptions.DeleteMany(param.ctx, bson.M{})
+	if err != nil {
+		log.Printf("Error flushing exceptions: %s.\n", err)
+		return
+	}
+
+	log.Printf("Exceptions successfully flushed. %+v\n", res)
+	return
+}
+
+func monthSort(listPtr *[]Metric) {
 	list := *listPtr
 	if sort.SliceIsSorted(list, func(i int, j int) bool {
 		return list[i].Date.Before(list[j].Date)
