@@ -39,62 +39,6 @@ type Metric struct {
 	Peak        int       `bson:"peak"`
 }
 
-type dbParams struct {
-	ctx    context.Context
-	db     *mongo.Database
-	client *mongo.Client
-}
-
-type collections struct {
-	stats      *mongo.Collection
-	exceptions *mongo.Collection
-}
-
-var param dbParams = initEnvironmentParams()
-var cols = collections{
-	stats:      param.db.Collection("population_stats"),
-	exceptions: param.db.Collection("exceptions"),
-}
-
-func initEnvironmentParams() dbParams {
-
-	var err error
-	var newDb *mongo.Database
-	var newClient *mongo.Client
-
-	tmpURI := env.GoDotEnvVariable("DEV_URI")
-	newClient, err = mongo.NewClient(options.Client().ApplyURI(tmpURI))
-	if err != nil {
-		log.Fatalf("[CRITICAL] Error initialising client. URI: %s", tmpURI)
-	}
-
-	// Dependent environemnt params
-	if env.GoDotEnvVariable("NODE_ENV") == "prd" {
-		newDb = newClient.Database("games_stats_app")
-		fmt.Printf("Target: PRD DB\n")
-	} else {
-		newDb = newClient.Database("games_stats_app_TST")
-		fmt.Printf("Target: TST DB\n")
-	}
-
-	// Independent environment params
-	newCtx, cancelFunc := context.WithTimeout(context.Background(), DBTIMEOUT*time.Second)
-	defer cancelFunc()
-
-	err = newClient.Connect(newCtx)
-	if err != nil {
-		log.Fatalf("[CRITICAL] Error connecting client. %s", err)
-	}
-
-	var newDbParams = dbParams{
-		ctx:    context.Background(), // Why can't I use newCtx here?
-		db:     newDb,
-		client: newClient,
-	}
-
-	return newDbParams
-}
-
 type dbAppProjection struct {
 	ID       int `bson:"_id"`
 	Name     int `bson:"name"`
@@ -109,14 +53,23 @@ type dbAppRef struct {
 	DomainID int                `bson:"app_id"`
 }
 
-// AppRef : app data (no historical data)
-type AppRef struct {
+// AppShadow : app data (no historical data)
+type AppShadow struct {
 	Date time.Time `bson:"date"`
 	Ref  dbAppRef  `bson:"reference"`
 }
 
+// Db interface
+type Db interface {
+	GetAppList() []AppShadow
+
+	PushDaily(id primitive.ObjectID, element *stats.DailyMetric) error
+	PushMonthly(id primitive.ObjectID, element *Metric) error
+	PushException(app *AppShadow) error
+}
+
 // GetAppList : Get List of Apps as AppMeta
-func GetAppList() []AppRef {
+func GetAppList() []AppShadow {
 
 	// Empty match - searching for all elements
 	match := bson.M{}
@@ -144,7 +97,7 @@ func GetAppList() []AppRef {
 		log.Fatal(err)
 	}
 
-	var appList []AppRef
+	var appList []AppShadow
 
 	for cursor.Next(param.ctx) {
 		var dbEntry dbAppRef
@@ -154,7 +107,7 @@ func GetAppList() []AppRef {
 			continue
 		}
 
-		aNewMetaElement := AppRef{
+		aNewMetaElement := AppShadow{
 			Ref:  dbEntry,
 			Date: dateTime,
 		}
@@ -166,8 +119,8 @@ func GetAppList() []AppRef {
 	return appList
 }
 
-// InsertDaily : Insert daily metric
-func InsertDaily(id primitive.ObjectID, newDaily *stats.DailyMetric) error {
+// PushDaily : Insert daily metric
+func PushDaily(id primitive.ObjectID, element *stats.DailyMetric) error {
 	log.Printf("[PlayerCount Collection] inserting new daily for app %s", id.String())
 
 	match := bson.M{"_id": id}
@@ -180,21 +133,8 @@ func InsertDaily(id primitive.ObjectID, newDaily *stats.DailyMetric) error {
 	return nil
 }
 
-// InsertException : Insert exception instance
-func InsertException(app *AppRef) error {
-	log.Printf("[Exception Queue] inserting daily update for app %s [%s]: %s \n",
-		app.Ref.Name, app.Ref.ID.String(), app.Date.String())
-
-	res, err := cols.exceptions.InsertOne(param.ctx, app)
-	if err != nil {
-		return err
-	}
-	log.Printf("Added to exception queue %s", res)
-	return nil
-}
-
-// InsertMonthly : Insert new month instance
-func InsertMonthly(id primitive.ObjectID, newMonthly *Metric) error {
+// PushMonthly : Insert new month instance
+func PushMonthly(id primitive.ObjectID, element *Metric) error {
 	log.Printf("[PlayerCount Collection] inserting new monthly for app %s.\n", id.String())
 
 	match := bson.M{"_id": id}
@@ -204,6 +144,19 @@ func InsertMonthly(id primitive.ObjectID, newMonthly *Metric) error {
 		return err
 	}
 	log.Println("[PlayerCount Collection] monthly insertion success.")
+	return nil
+}
+
+// PushException : Insert exception instance
+func PushException(app *AppShadow) error {
+	log.Printf("[Exception Queue] inserting daily update for app %s [%s]: %s \n",
+		app.Ref.Name, app.Ref.ID.String(), app.Date.String())
+
+	res, err := cols.exceptions.InsertOne(param.ctx, app)
+	if err != nil {
+		return err
+	}
+	log.Printf("Added to exception queue %s", res)
 	return nil
 }
 
@@ -286,8 +239,8 @@ func UpdateDailyMetricList(id primitive.ObjectID, newMetricList *[]stats.DailyMe
 }
 
 // GetExceptions - Return list of AppRefs and clear collection
-func GetExceptions() (*[]AppRef, error) {
-	var appRefs []AppRef
+func GetExceptions() (*[]AppShadow, error) {
+	var appRefs []AppShadow
 
 	cursor, err := cols.exceptions.Find(param.ctx, bson.M{})
 	if err != nil {

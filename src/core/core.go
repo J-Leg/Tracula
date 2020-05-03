@@ -1,19 +1,19 @@
 package core
 
 import (
+	"cloud.google.com/go/logging"
+	"context"
 	"fmt"
 	"github.com/cheggaaa/pb/v3"
-	"log"
 	"math"
 	"os"
 	"playercount/src/db"
+	"playercount/src/env"
 	"playercount/src/stats"
 	"time"
 )
 
-const (
-	monthsInYear = 12
-)
+const monthsInYear = 12
 
 // Execute : Core execution for daily updates
 // Update all apps
@@ -39,7 +39,9 @@ func Execute() {
 }
 
 // ExecuteMonthly : Monthly process
-func ExecuteMonthly() {
+func ExecuteMonthly(ctx context.Context) {
+	var cfg *env.Config = env.InitConfig(ctx)
+
 	var appList = db.GetAppList()
 	bar := pb.StartNew(len(appList))
 	bar.SetRefreshRate(time.Second)
