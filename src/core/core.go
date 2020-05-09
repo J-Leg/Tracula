@@ -117,19 +117,23 @@ func processAppMonthly(app *db.AppRef) error {
 		log.Printf("Error updating daily metric list (removal) for app: %s", app.Ref.ID.String())
 	}
 
-	var previousMonthMetrics *db.Metric
-	previousMonthMetrics, err = db.GetPreviousMonthMetric(app.Ref.ID)
+	var monthMetricListPtr *[]db.Metric
+	monthMetricListPtr, err = db.GetMonthMetricList(app.Ref.ID)
 	if err != nil {
 		log.Printf("Error retrieving previous month metrics for app %s.\n", app.Ref.ID.String())
 		return err
 	}
 
+	monthMetricList := *monthMetricListPtr
+	previousMonthMetrics := &monthMetricList[len(monthMetricList)-1]
 	newMonth := constructNewMonthMetric(previousMonthMetrics, newPeak, float64(newAverage), monthToAvg, yearToAvg)
-	err = db.InsertMonthly(app.Ref.ID, newMonth)
+	monthMetricList = append(monthMetricList, *newMonth)
+
+	db.UpdateMonthlyMetricList(app.Ref.ID, monthMetricListPtr)
 	if err != nil {
-		log.Printf("Error updating new month metrics for app %s.\n", app.Ref.ID.String())
-		return err
+		log.Println("Error updating monthly metric list")
 	}
+	log.Println("[PlayerCount Collection] monthly insertion success.")
 	return nil
 }
 
@@ -153,7 +157,6 @@ func processApp(app *db.AppRef) error {
 		}
 		return err
 	}
-
 	return nil
 }
 
@@ -164,6 +167,8 @@ func RecoverExceptions() {
 		log.Printf("Error retrieving exceptions. %s", err)
 		return
 	}
+
+	db.FlushExceptions()
 
 	for _, app := range *appsToUpdate {
 		err = processApp(&app)
