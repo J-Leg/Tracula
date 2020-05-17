@@ -11,7 +11,9 @@ import (
 )
 
 func main() {
-	funcframework.RegisterHTTPFunction("/", playercount.ProcessMonthly)
+	funcframework.RegisterHTTPFunction("/monthly", playercount.ProcessMonthly)
+	funcframework.RegisterHTTPFunction("/daily", playercount.ProcessDaily)
+	funcframework.RegisterHTTPFunction("/recover", playercount.Recover)
 
 	// Use PORT environment variable, or default to 8080.
 	port := "8080"

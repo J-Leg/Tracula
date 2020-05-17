@@ -1,8 +1,6 @@
 package db
 
 import (
-	"context"
-	"fmt"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -10,7 +8,6 @@ import (
 	"log"
 	"playercount/src/env"
 	"playercount/src/stats" // Way to clear this?
-	"sort"
 	"time"
 )
 
@@ -18,6 +15,8 @@ import (
 const (
 	DBTIMEOUT   = 10
 	DATEPATTERN = "2006-01-02 15:04:05"
+	STATSCOL    = "population_stats"
+	EXCCOL      = "exceptions"
 )
 
 // App - Entry in the DB is of this format
@@ -59,17 +58,30 @@ type AppShadow struct {
 	Ref  dbAppRef  `bson:"reference"`
 }
 
+// Dbcfg :
+// composition: Dbcfg implements interface
+// (allows implementation of the below methods)
+type Dbcfg env.Config
+
 // Db interface
 type Db interface {
-	GetAppList() []AppShadow
+	GetAppList() ([]AppShadow, error)
+	GetMonthlyList(id primitive.ObjectID) (*[]Metric, error)
+	GetDailyList(id primitive.ObjectID) (*[]stats.DailyMetric, error)
+	GetExceptions() (*[]AppShadow, error)
 
 	PushDaily(id primitive.ObjectID, element *stats.DailyMetric) error
 	PushMonthly(id primitive.ObjectID, element *Metric) error
 	PushException(app *AppShadow) error
+
+	UpdateMonthlyList(id primitive.ObjectID, newMetricList *[]Metric) error
+	UpdateDailyList(id primitive.ObjectID, newMetricList *[]stats.DailyMetric) error
+
+	FlushExceptions()
 }
 
 // GetAppList : Get List of Apps as AppMeta
-func GetAppList() []AppShadow {
+func (cfg Dbcfg) GetAppList() ([]AppShadow, error) {
 
 	// Empty match - searching for all elements
 	match := bson.M{}
@@ -84,110 +96,113 @@ func GetAppList() []AppShadow {
 		DomainID: 1,
 	}
 
+	localCtx := cfg.Ctx
+
 	// Query options
 	// Only want fields corresponding to dbAppRef
 	opts := options.Find().SetProjection(proj)
-	cursor, err := cols.stats.Find(param.ctx, match, opts)
+	cursor, err := cfg.Db.Collection(STATSCOL).Find(localCtx, match, opts)
 	if err != nil {
-		log.Fatal(err)
+		cfg.Trace.Error.Printf("cursor construction failed.\n")
+		return nil, err
 	}
 
 	dateTime, err := time.Parse(DATEPATTERN, time.Now().UTC().String()[:19])
 	if err != nil {
-		log.Fatal(err)
+		cfg.Trace.Error.Printf("unable to construct datetime.\n")
+		return nil, err
 	}
 
 	var appList []AppShadow
-
-	for cursor.Next(param.ctx) {
+	for cursor.Next(localCtx) {
 		var dbEntry dbAppRef
 
 		if err := cursor.Decode(&dbEntry); err != nil {
-			log.Printf("Error decoding DB entry. %s", err)
+			cfg.Trace.Error.Printf("Error decoding DB entry. %s", err)
 			continue
 		}
 
-		aNewMetaElement := AppShadow{
+		aNewShadow := AppShadow{
 			Ref:  dbEntry,
 			Date: dateTime,
 		}
 
-		appList = append(appList, aNewMetaElement)
+		appList = append(appList, aNewShadow)
 	}
-	cursor.Close(param.ctx)
-
-	return appList
+	cursor.Close(localCtx)
+	return appList, nil
 }
 
 // PushDaily : Insert daily metric
-func PushDaily(id primitive.ObjectID, element *stats.DailyMetric) error {
-	log.Printf("[PlayerCount Collection] inserting new daily for app %s", id.String())
+func (cfg Dbcfg) PushDaily(id primitive.ObjectID, element *stats.DailyMetric) error {
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] inserting new daily for app %s\n", id.String())
 
 	match := bson.M{"_id": id}
-	action := bson.M{"$push": bson.M{"daily_metrics": newDaily}}
-	_, err := cols.stats.UpdateOne(param.ctx, match, action)
+	action := bson.M{"$push": bson.M{"daily_metrics": element}}
+	_, err := cfg.Db.Collection(STATSCOL).UpdateOne(cfg.Ctx, match, action)
 	if err != nil {
 		return err
 	}
-	log.Println("[PlayerCount Collection] daily insertion success.")
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] insertion success.\n")
 	return nil
 }
 
 // PushMonthly : Insert new month instance
-func PushMonthly(id primitive.ObjectID, element *Metric) error {
-	log.Printf("[PlayerCount Collection] inserting new monthly for app %s.\n", id.String())
+func (cfg Dbcfg) PushMonthly(id primitive.ObjectID, element *Metric) error {
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] inserting new monthly for app %s.\n", id.String())
 
 	match := bson.M{"_id": id}
-	action := bson.M{"$push": bson.M{"metrics": newMonthly}}
-	_, err := cols.stats.UpdateOne(param.ctx, match, action)
+	action := bson.M{"$push": bson.M{"metrics": element}}
+	res, err := cfg.Db.Collection(STATSCOL).UpdateOne(cfg.Ctx, match, action)
 	if err != nil {
 		return err
 	}
-	log.Println("[PlayerCount Collection] monthly insertion success.")
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] insertion success - %+v.\n", res)
 	return nil
 }
 
 // PushException : Insert exception instance
-func PushException(app *AppShadow) error {
-	log.Printf("[Exception Queue] inserting daily update for app %s [%s]: %s \n",
+func (cfg Dbcfg) PushException(app *AppShadow) error {
+	cfg.Trace.Debug.Printf("[Exception Queue] inserting daily update for app %s [%s]: %s \n",
 		app.Ref.Name, app.Ref.ID.String(), app.Date.String())
 
-	res, err := cols.exceptions.InsertOne(param.ctx, app)
+	res, err := cfg.Db.Collection(EXCCOL).InsertOne(cfg.Ctx, app)
 	if err != nil {
 		return err
 	}
-	log.Printf("Added to exception queue %s", res)
+	cfg.Trace.Debug.Printf("[Exception Queue] insertion success - %s.\n", res)
 	return nil
 }
 
-// UpdateMonthlyMetricList : update list
-func UpdateMonthlyMetricList(id primitive.ObjectID, newMetricList *[]Metric) error {
-	log.Printf("[PlayerCount Collection] inserting new monthly metric list for app %s.\n", id.String())
+// UpdateMonthlyList : update list
+func (cfg Dbcfg) UpdateMonthlyList(id primitive.ObjectID, newMetricList *[]Metric) error {
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] updating monthly metric list - App: %s.\n", id.String())
 
 	match := bson.M{"_id": id}
 	action := bson.M{"$set": bson.M{"metrics": *newMetricList}}
-	_, err := cols.stats.UpdateOne(param.ctx, match, action)
+	res, err := cfg.Db.Collection(STATSCOL).UpdateOne(cfg.Ctx, match, action)
 	if err != nil {
 		return err
 	}
-	log.Println("[PlayerCount Collection] monthly set success.")
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] update success - %+v\n.", res)
 	return nil
 }
 
-// GetMonthMetricList : retrieve previous month's metrics
-func GetMonthMetricList(id primitive.ObjectID) (*[]Metric, error) {
-	log.Printf("[PlayerCount Collection] retrieving last month metrics for app %s.\n", id.String())
+// GetMonthlyList : retrieve previous month's metrics
+func (cfg Dbcfg) GetMonthlyList(id primitive.ObjectID) (*[]Metric, error) {
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] retrieve month metrics for app %s.\n", id.String())
 
 	var app App
 	match := bson.M{"_id": id}
-	err := cols.stats.FindOne(param.ctx, match).Decode(&app)
+	err := cfg.Db.Collection(STATSCOL).FindOne(cfg.Ctx, match).Decode(&app)
 	if err != nil {
-		log.Printf("Error retrieving document from DB: %s\n", err)
+		cfg.Trace.Error.Printf("error retrieving document from DB: %s\n", err)
 		if err == mongo.ErrNoDocuments {
-			log.Printf("ID %s does not exist in stats DB.\n", id.String())
+			cfg.Trace.Debug.Printf("app id %s does not exist in %s.\n", id.String(), STATSCOL)
 		}
 		return nil, err
 	}
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] retrieval success.\n")
 
 	monthlyMetricList := app.Metrics
 	if len(monthlyMetricList) == 0 {
@@ -195,17 +210,16 @@ func GetMonthMetricList(id primitive.ObjectID) (*[]Metric, error) {
 		return nil, nil
 	}
 
-	monthSort(&monthlyMetricList)
 	return &monthlyMetricList, nil
 }
 
-// GetDailyMetricList : Fetch all daily metrics
-func GetDailyMetricList(id primitive.ObjectID) (*[]stats.DailyMetric, error) {
-	log.Printf("Retrieving daily metric list for app %s.\n", id.String())
+// GetDailyList : Fetch all daily metrics
+func (cfg Dbcfg) GetDailyList(id primitive.ObjectID) (*[]stats.DailyMetric, error) {
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] retrieving daily metric list for app %s.\n", id.String())
 	var result App
 
 	match := bson.M{"_id": id}
-	err := cols.stats.FindOne(param.ctx, match).Decode(&result)
+	err := cfg.Db.Collection(STATSCOL).FindOne(cfg.Ctx, match).Decode(&result)
 	if err != nil {
 		log.Printf("Error retrieving document from DB: %s\n", err)
 		if err == mongo.ErrNoDocuments {
@@ -213,19 +227,19 @@ func GetDailyMetricList(id primitive.ObjectID) (*[]stats.DailyMetric, error) {
 		}
 		return nil, err
 	}
-
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] retrieval success.\n")
 	return &result.DailyMetrics, nil
 }
 
-// UpdateDailyMetricList : Update daily metric list for app
-func UpdateDailyMetricList(id primitive.ObjectID, newMetricList *[]stats.DailyMetric) error {
-	log.Printf("Retrieving daily metric list for app %s.\n", id.String())
+// UpdateDailyList : Update daily metric list for app
+func (cfg Dbcfg) UpdateDailyList(id primitive.ObjectID, newMetricList *[]stats.DailyMetric) error {
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] updating daily metric list for app %s.\n", id.String())
 	var updatedDoc App
 
 	match := bson.M{"_id": id}
 	action := bson.M{"$set": bson.M{"daily_metrics": *newMetricList}}
 
-	err := cols.stats.FindOneAndUpdate(param.ctx, match, action).Decode(&updatedDoc)
+	err := cfg.Db.Collection(STATSCOL).FindOneAndUpdate(cfg.Ctx, match, action).Decode(&updatedDoc)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			log.Printf("ID %s does not exist in stats DB.\n", id.String())
@@ -233,53 +247,40 @@ func UpdateDailyMetricList(id primitive.ObjectID, newMetricList *[]stats.DailyMe
 		return err
 	}
 
-	log.Printf("Successfully updated daily metric list for app ID %s.\n", id.String())
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] update success.\n")
 	return nil
 }
 
-// GetExceptions - Return list of AppRefs and clear collection
-func GetExceptions() (*[]AppShadow, error) {
-	var appRefs []AppShadow
-
-	cursor, err := cols.exceptions.Find(param.ctx, bson.M{})
+// GetExceptions - Return list of AppShadows
+func (cfg Dbcfg) GetExceptions() (*[]AppShadow, error) {
+	cfg.Trace.Debug.Printf("[Exception Queue] retrieving all exceptions\n")
+	var appList []AppShadow
+	ctx := cfg.Ctx
+	cursor, err := cfg.Db.Collection(EXCCOL).Find(ctx, bson.M{})
 	if err != nil {
-		log.Printf("Error processing exceptions. %s", err)
+		cfg.Trace.Error.Printf("cursor construction failed. %s\n", err)
 		return nil, err
 	}
 
-	if err = cursor.All(param.ctx, &appRefs); err != nil {
-		log.Printf("Error assembling excpetions. %s", err)
-		cursor.Close(param.ctx)
+	if err = cursor.All(ctx, &appList); err != nil {
+		cfg.Trace.Error.Printf("cursor Decoding failed. %s\n", err)
+		cursor.Close(ctx)
 		return nil, err
 	}
 
-	cursor.Close(param.ctx)
-	return &appRefs, nil
+	cursor.Close(ctx)
+	return &appList, nil
 }
 
-// FlushExceptions :
-func FlushExceptions() {
-	res, err := cols.exceptions.DeleteMany(param.ctx, bson.M{})
+// FlushExceptions : Clear exception queue
+func (cfg Dbcfg) FlushExceptions() {
+	cfg.Trace.Debug.Printf("[Exception Queue] flushing exceptions\n")
+	res, err := cfg.Db.Collection(EXCCOL).DeleteMany(cfg.Ctx, bson.M{})
 	if err != nil {
-		log.Printf("Error flushing exceptions: %s.\n", err)
+		cfg.Trace.Error.Printf("error flushing exceptions: %s.\n", err)
 		return
 	}
 
-	log.Printf("Exceptions successfully flushed. %+v\n", res)
+	cfg.Trace.Debug.Printf("flush success: %+v.\n", res)
 	return
-}
-
-func monthSort(listPtr *[]Metric) {
-	list := *listPtr
-	if sort.SliceIsSorted(list, func(i int, j int) bool {
-		return list[i].Date.Before(list[j].Date)
-	}) {
-		return
-	}
-
-	log.Println("Unsorted monthly metrics. Sort it!")
-
-	sort.Slice(list, func(i int, j int) bool {
-		return list[i].Date.Before(list[j].Date)
-	})
 }

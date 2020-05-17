@@ -1,9 +1,7 @@
 package core
 
 import (
-	"cloud.google.com/go/logging"
 	"context"
-	"fmt"
 	"github.com/cheggaaa/pb/v3"
 	"math"
 	"os"
@@ -13,12 +11,22 @@ import (
 	"time"
 )
 
-const monthsInYear = 12
+// Constants
+const (
+	MONTHS = 12
+)
 
 // Execute : Core execution for daily updates
 // Update all apps
-func Execute() {
-	var appList = db.GetAppList()
+func Execute(ctx context.Context) {
+	var cfg *env.Config = env.InitConfig(ctx)
+	var dbcfg db.Dbcfg = db.Dbcfg(*cfg)
+	cfg.Trace.Debug.Printf("initiate daily execution.\n")
+
+	appList, err := dbcfg.GetAppList()
+	if err != nil {
+		return
+	}
 
 	bar := pb.StartNew(len(appList))
 	bar.SetRefreshRate(time.Second)
@@ -30,42 +38,35 @@ func Execute() {
 		// Update progress
 		bar.Increment()
 		time.Sleep(time.Millisecond)
-		err := processApp(&app)
+		err := processApp(&dbcfg, &app)
 		if err != nil {
 			continue
 		}
 	}
 	bar.Finish()
+	cfg.Trace.Debug.Printf("conclude daily execution.\n")
+
+	// Close
+	cfg.LoggerClient.Close()
+	return
 }
 
 // ExecuteMonthly : Monthly process
 func ExecuteMonthly(ctx context.Context) {
 	var cfg *env.Config = env.InitConfig(ctx)
+	var dbcfg db.Dbcfg = db.Dbcfg(*cfg)
+	cfg.Trace.Debug.Printf("initiate monthly execution.\n")
 
-	var appList = db.GetAppList()
+	appList, err := dbcfg.GetAppList()
+	if err != nil {
+		cfg.Trace.Error.Printf("failed to retrieve app list. %s", err)
+		return
+	}
+
 	bar := pb.StartNew(len(appList))
 	bar.SetRefreshRate(time.Second)
 	bar.SetWriter(os.Stdout)
 	bar.Start()
-
-	for _, app := range appList {
-
-		// Update progress
-		bar.Increment()
-		time.Sleep(time.Millisecond)
-		err := processAppMonthly(&app)
-		if err != nil {
-			continue
-		}
-	}
-	bar.Finish()
-}
-
-func processAppMonthly(app *db.AppRef) error {
-	dailyMetricList, err := db.GetDailyMetricList(app.Ref.ID)
-	if err != nil {
-		return err
-	}
 
 	currentDateTime := time.Now()
 	var monthToAvg time.Month = currentDateTime.Month() - 1
@@ -78,6 +79,54 @@ func processAppMonthly(app *db.AppRef) error {
 		yearToAvg = currentDateTime.Year() - 1
 	}
 
+	for _, app := range appList {
+		// Update progress
+		bar.Increment()
+		time.Sleep(time.Millisecond)
+
+		processAppMonthly(&dbcfg, &app, monthToAvg, yearToAvg)
+	}
+	bar.Finish()
+	cfg.Trace.Debug.Printf("conclude monthly execution.\n")
+
+	// Close
+	cfg.LoggerClient.Close()
+	return
+}
+
+// ExecuteRecovery : Best effort to retry all exception instances
+func ExecuteRecovery(ctx context.Context) {
+	var cfg *env.Config = env.InitConfig(ctx)
+	var dbcfg db.Dbcfg = db.Dbcfg(*cfg)
+	var appsToUpdate, err = dbcfg.GetExceptions()
+	if err != nil {
+		cfg.Trace.Error.Printf("Error retrieving exceptions. %s", err)
+		return
+	}
+
+	dbcfg.FlushExceptions()
+
+	cfg.Trace.Info.Printf("[Exceptions] re-do daily process.\n")
+	for _, app := range *appsToUpdate {
+		err = processApp(&dbcfg, &app)
+		if err != nil {
+			cfg.Trace.Error.Printf("Daily retry (%s) failed for app: %+v - %s", app.Date, app.Ref.ID, err)
+			continue
+		}
+	}
+
+	cfg.Trace.Info.Printf("[Exceptions] recovery process complete.\n")
+	cfg.LoggerClient.Close()
+	return
+}
+
+func processAppMonthly(cfg *db.Dbcfg, app *db.AppShadow, monthToAvg time.Month, yearToAvg int) {
+	cfg.Trace.Debug.Printf("monthly process on app: %s - id: %+v.\n", app.Ref.Name, app.Ref.ID)
+	dailyMetricList, err := cfg.GetDailyList(app.Ref.ID)
+	if err != nil {
+		cfg.Trace.Error.Printf("Error retrieving daily metric: %s", err)
+		return
+	}
 	// Initialise a new list
 	var newDailyMetricList []stats.DailyMetric
 
@@ -87,9 +136,18 @@ func processAppMonthly(app *db.AppRef) error {
 
 	for _, dailyMetric := range *dailyMetricList {
 		var elementMonth = dailyMetric.Date.Month()
+		var elementYear = dailyMetric.Date.Year()
+		var monthDiff = monthToAvg - elementMonth
 
-		// Only keep daily metrics for the last 3 months
-		if (monthToAvg-elementMonth)%monthsInYear < 3 {
+		// Only keep daily metrics up to the last 3 months
+		// This condition "should" be enough if older months were correctly purged
+		if (monthDiff+MONTHS)%MONTHS < 3 {
+
+			// Secondary conidition is just for assurance
+			if monthDiff < 0 && (elementYear != yearToAvg-1) {
+				continue
+			}
+
 			newDailyMetricList = append(newDailyMetricList, dailyMetric)
 		}
 
@@ -102,106 +160,65 @@ func processAppMonthly(app *db.AppRef) error {
 		numCounted++
 	}
 
-	var newAverage int
-	if numCounted == 0 {
-		newAverage = 0
-	} else {
+	var newAverage int = 0
+	if numCounted > 0 {
 		newAverage = total / numCounted
 	}
 
-	log.Printf("Computed average player count of: %d on month: %d using %d dates.\n",
+	cfg.Trace.Debug.Printf("Computed average player count of: %d on month: %d using %d dates.\n",
 		newAverage, monthToAvg, numCounted)
 
-	err = db.UpdateDailyMetricList(app.Ref.ID, &newDailyMetricList)
+	err = cfg.UpdateDailyList(app.Ref.ID, &newDailyMetricList)
 	if err != nil {
-		log.Printf("Error updating daily metric list (removal) for app: %s", app.Ref.ID.String())
+		cfg.Trace.Error.Printf("Error updating daily metric list: %s.\n", err)
+		return
 	}
 
 	var monthMetricListPtr *[]db.Metric
-	monthMetricListPtr, err = db.GetMonthMetricList(app.Ref.ID)
+	monthMetricListPtr, err = cfg.GetMonthlyList(app.Ref.ID)
 	if err != nil {
-		log.Printf("Error retrieving previous month metrics for app %s.\n", app.Ref.ID.String())
-		return err
+		cfg.Trace.Error.Printf("Error retrieving month metrics: %s.\n", err)
+		return
 	}
+
+	monthSort(monthMetricListPtr)
 
 	monthMetricList := *monthMetricListPtr
 	previousMonthMetrics := &monthMetricList[len(monthMetricList)-1]
 	newMonth := constructNewMonthMetric(previousMonthMetrics, newPeak, float64(newAverage), monthToAvg, yearToAvg)
 	monthMetricList = append(monthMetricList, *newMonth)
 
-	db.UpdateMonthlyMetricList(app.Ref.ID, monthMetricListPtr)
+	cfg.UpdateMonthlyList(app.Ref.ID, monthMetricListPtr)
 	if err != nil {
-		log.Println("Error updating monthly metric list")
-	}
-	log.Println("[PlayerCount Collection] monthly insertion success.")
-	return nil
-}
-
-func processApp(app *db.AppRef) error {
-	dm, err := stats.Fetch(app.Date, app.Ref.Domain, app.Ref.DomainID)
-	if err != nil {
-		err = db.InsertException(app)
-		if err != nil {
-			log.Printf("Error inserting app %d to exception queue! %s\n", app.Ref.DomainID, err)
-			// What do?
-		}
-		return err
-	}
-
-	err = db.InsertDaily(app.Ref.ID, dm)
-	if err != nil {
-		err = db.InsertException(app)
-		if err != nil {
-			log.Printf("Error inserting app %d to exception queue! %s\n", app.Ref.DomainID, err)
-			// What do?
-		}
-		return err
-	}
-	return nil
-}
-
-// RecoverExceptions : Best effort to retry all exception instances
-func RecoverExceptions() {
-	var appsToUpdate, err = db.GetExceptions()
-	if err != nil {
-		log.Printf("Error retrieving exceptions. %s", err)
+		cfg.Trace.Error.Printf("error updating month metric list %s.\n", err)
 		return
 	}
 
-	db.FlushExceptions()
-
-	for _, app := range *appsToUpdate {
-		err = processApp(&app)
-		if err != nil {
-			log.Printf("Daily retry (%s) failed for app: %+v - %s", app.Date, app.Ref.ID, err)
-			continue
-		}
-	}
+	cfg.Trace.Debug.Printf("monthly process success.\n")
+	return
 }
 
-func constructNewMonthMetric(previous *db.Metric, peak float64, avg float64,
-	month time.Month, year int) *db.Metric {
-
-	var gainStr string
-	var gainPcStr string
-	if previous != nil {
-		gain := avg - float64(previous.AvgPlayers)
-		gainPc := gain / float64(previous.AvgPlayers)
-		gainStr = fmt.Sprintf("%.2f", gain)
-		gainPcStr = fmt.Sprintf("%.2f%%", gainPc)
-	} else {
-		gainStr = "-"
-		gainPcStr = "-"
+func processApp(cfg *db.Dbcfg, app *db.AppShadow) error {
+	cfg.Trace.Debug.Printf("daily process on app: %s - id: %+v.\n", app.Ref.Name, app.Ref.ID)
+	dm, err := stats.Fetch(app.Date, app.Ref.Domain, app.Ref.DomainID)
+	if err != nil {
+		err = cfg.PushException(app)
+		if err != nil {
+			cfg.Trace.Error.Printf("error inserting app %d to exception queue! %s\n", app.Ref.DomainID, err)
+			// What do?
+		}
+		return err
 	}
 
-	// Construct new month metric
-	var newMonthMetric = db.Metric{
-		Date:        time.Date(year, month, 1, 0, 0, 0, 0, time.UTC),
-		AvgPlayers:  int(avg),
-		Gain:        gainStr,
-		GainPercent: gainPcStr,
-		Peak:        int(peak),
+	err = cfg.PushDaily(app.Ref.ID, dm)
+	if err != nil {
+		err = cfg.PushException(app)
+		if err != nil {
+			cfg.Trace.Error.Printf("error inserting app %d to exception queue! %s\n", app.Ref.DomainID, err)
+			// What do?
+		}
+		return err
 	}
-
-	return &newMonthMetric
+	cfg.Trace.Debug.Printf("daily process success on app: %s - id: %+v.\n", app.Ref.Name, app.Ref.ID)
+	return nil
 }

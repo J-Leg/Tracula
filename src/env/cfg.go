@@ -8,28 +8,41 @@ import (
 	"log"
 )
 
+// Constants
+const (
+	DBTIMEOUT = 5
+)
+
+type loggers struct {
+	Info  *log.Logger
+	Debug *log.Logger
+	Error *log.Logger
+}
+
 // Config for execution
 type Config struct {
-	ctx context.Context
-	db  *mongo.Database
-	log *logging.Logger
+	Ctx          context.Context
+	Db           *mongo.Database
+	Trace        *loggers
+	LoggerClient *logging.Client
 }
 
 // InitConfig - initialise config struct
 func InitConfig(ctx context.Context) *Config {
-	newLogger := initLogger(ctx)
 	newDb := initDb(ctx)
 
+	newLoggers, loggerClient := initLoggers(ctx)
 	newConfig := Config{
-		ctx: ctx,
-		db:  newDb,
-		log: newLogger,
+		Ctx:          ctx,
+		Db:           newDb,
+		Trace:        newLoggers,
+		LoggerClient: loggerClient,
 	}
 
 	return &newConfig
 }
 
-func initLogger(ctx context.Context) *logging.Logger {
+func initLoggers(ctx context.Context) (*loggers, *logging.Client) {
 	projectID := GoDotEnvVariable("PROJ_ID")
 
 	// Creates a client.
@@ -37,15 +50,17 @@ func initLogger(ctx context.Context) *logging.Logger {
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
 
-	// Sets the name of the log to write to.
-	logName := "my-log"
+	logName := "player-count"
 	logger := client.Logger(logName)
 
-	// Logs "hello world", log entry is visible at
-	// Stackdriver Logs.
-	return logger
+	newLoggers := loggers{
+		Info:  logger.StandardLogger(logging.Info),
+		Debug: logger.StandardLogger(logging.Debug),
+		Error: logger.StandardLogger(logging.Error),
+	}
+
+	return &newLoggers, client
 }
 
 func initDb(ctx context.Context) *mongo.Database {
@@ -72,6 +87,11 @@ func initDb(ctx context.Context) *mongo.Database {
 	} else {
 		newDb = newClient.Database("games_stats_app_TST")
 		log.Printf("Target: TST DB\n")
+	}
+
+	err = newClient.Connect(ctx)
+	if err != nil {
+		log.Fatalf("[CRITICAL] error connecting client. %s", err)
 	}
 
 	return newDb
