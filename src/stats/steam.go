@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -35,7 +34,7 @@ type DataContainer struct {
 
 func fetchSteam(id int) (int, error) {
 	url := BASEURL + strconv.Itoa(id)
-	log.Println(fmt.Sprintf("[STEAM] Fetching current player count on %s", url))
+	// log.Println(fmt.Sprintf("[STEAM] Fetching current player count on %s", url))
 
 	res := 0
 	r, err := myClient.Get(url)
@@ -56,6 +55,6 @@ func fetchSteam(id int) (int, error) {
 	}
 
 	res = rc.Data.Count
-	log.Println(fmt.Sprintf("Current total player count for url: %d", res))
+	// log.Println(fmt.Sprintf("Current total player count for url: %d", res))
 	return res, nil
 }
