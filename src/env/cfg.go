@@ -6,6 +6,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"log"
+	"os"
 )
 
 // Constants
@@ -43,7 +44,7 @@ func InitConfig(ctx context.Context) *Config {
 }
 
 func initLoggers(ctx context.Context) (*loggers, *logging.Client) {
-	projectID := GoDotEnvVariable("PROJ_ID")
+	projectID := os.Getenv("PROJ_ID")
 
 	// Creates a client.
 	client, err := logging.NewClient(ctx, projectID)
@@ -67,31 +68,40 @@ func initDb(ctx context.Context) *mongo.Database {
 	var newDb *mongo.Database
 	var clientOptions *options.ClientOptions
 	var dbURI string
-	if GoDotEnvVariable("NODE_ENV") == "prd" {
-		dbURI = GoDotEnvVariable("PRD_URI")
-		clientOptions = options.Client().ApplyURI(GoDotEnvVariable("PRD_URI"))
+	nodeEnv := os.Getenv("NODE_ENV")
+	dbEnv := os.Getenv("DB_ENV")
+
+	if dbEnv == "prd" {
+		log.Printf("Target: PRD Cluster")
+		dbURI = os.Getenv("PRD_URI")
+		clientOptions = options.Client().ApplyURI(os.Getenv("PRD_URI"))
+	} else if dbEnv == "tst" || dbEnv == "dev" {
+		log.Printf("Target: Local")
+		dbURI = os.Getenv("DEV_URI")
+		clientOptions = options.Client().ApplyURI(os.Getenv("DEV_URI"))
 	} else {
-		dbURI = GoDotEnvVariable("DEV_URI")
-		clientOptions = options.Client().ApplyURI(GoDotEnvVariable("DEV_URI"))
+		log.Fatalf("[CRITICAL] Undefined phase!\n")
 	}
 
 	newClient, err := mongo.NewClient(clientOptions)
 	if err != nil {
-		log.Fatalf("[CRITICAL] Error initialising client. URI: %s", dbURI)
+		log.Fatalf("[CRITICAL] Error initialising client. URI: %s\n", dbURI)
 	}
 
 	// To be removed when another DB URI is used
-	if GoDotEnvVariable("NODE_ENV") == "prd" {
+	if nodeEnv == "prd" {
 		newDb = newClient.Database("games_stats_app")
 		log.Printf("Target: PRD DB\n")
-	} else {
+	} else if nodeEnv == "dev" || nodeEnv == "tst" {
 		newDb = newClient.Database("games_stats_app_TST")
-		log.Printf("Target: TST DB\n")
+		log.Printf("Target: DEV DB\n")
+	} else {
+		log.Fatalf("[CRITICAL] Undefined phase!\n")
 	}
 
 	err = newClient.Connect(ctx)
 	if err != nil {
-		log.Fatalf("[CRITICAL] error connecting client. %s", err)
+		log.Fatalf("[CRITICAL] error connecting client. %s\n", err)
 	}
 
 	return newDb

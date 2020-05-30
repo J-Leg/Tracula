@@ -2,13 +2,18 @@
 package main
 
 import (
+	"github.com/GoogleCloudPlatform/functions-framework-go/funcframework"
+	"github.com/joho/godotenv"
 	"log"
 	"os"
-
-	// "cloud.google.com/go/logging"
-	"github.com/GoogleCloudPlatform/functions-framework-go/funcframework"
 	"playercount"
 )
+
+func init() {
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env override file.")
+	}
+}
 
 func main() {
 	funcframework.RegisterHTTPFunction("/monthly", playercount.ProcessMonthly)

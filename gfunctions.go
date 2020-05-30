@@ -31,7 +31,7 @@ func ProcessDaily(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
 	fmt.Println("~~~~~~~ Execute Daily Update ~~~~~~~")
-	core.ExecuteMonthly(ctx)
+	core.Execute(ctx)
 	fmt.Println("~~~~~~~ Daily Update Complete ~~~~~~~")
 
 	end := time.Now()
