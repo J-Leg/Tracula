@@ -1,4 +1,3 @@
-// This file is purely for local development
 package main
 
 import (
@@ -6,7 +5,9 @@ import (
 	"github.com/joho/godotenv"
 	"log"
 	"os"
-	"playercount"
+	"playercount/functions/daily"
+	"playercount/functions/monthly"
+	"playercount/functions/recovery"
 )
 
 func init() {
@@ -16,9 +17,9 @@ func init() {
 }
 
 func main() {
-	funcframework.RegisterHTTPFunction("/monthly", playercount.ProcessMonthly)
-	funcframework.RegisterHTTPFunction("/daily", playercount.ProcessDaily)
-	funcframework.RegisterHTTPFunction("/recover", playercount.Recover)
+	funcframework.RegisterHTTPFunction("/monthly", monthly.ProcessMonthly)
+	funcframework.RegisterHTTPFunction("/daily", daily.ProcessDaily)
+	funcframework.RegisterHTTPFunction("/recover", recovery.Recover)
 
 	// Use PORT environment variable, or default to 8080.
 	port := "8080"
