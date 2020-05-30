@@ -1,4 +1,4 @@
-module playercount
+module github.com/J-Leg/player-count
 
 go 1.13
 

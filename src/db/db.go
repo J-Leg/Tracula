@@ -6,8 +6,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"log"
-	"playercount/src/env"
-	"playercount/src/stats" // Way to clear this?
+	"github.com/J-Leg/player-count/src/env"
+	"github.com/J-Leg/player-count/src/stats" // Way to clear this?
 	"time"
 )
 

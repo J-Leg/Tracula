@@ -2,7 +2,7 @@ package core
 
 import (
 	"fmt"
-	"playercount/src/db"
+	"github.com/J-Leg/player-count/src/db"
 	"sort"
 	"time"
 )

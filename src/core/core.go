@@ -2,12 +2,12 @@ package core
 
 import (
 	"context"
+	"github.com/J-Leg/player-count/src/db"
+	"github.com/J-Leg/player-count/src/env"
+	"github.com/J-Leg/player-count/src/stats"
 	"github.com/cheggaaa/pb/v3"
 	"math"
 	"os"
-	"playercount/src/db"
-	"playercount/src/env"
-	"playercount/src/stats"
 	"time"
 )
 
