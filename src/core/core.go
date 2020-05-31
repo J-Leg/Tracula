@@ -1,7 +1,6 @@
 package core
 
 import (
-	"context"
 	"github.com/J-Leg/player-count/src/db"
 	"github.com/J-Leg/player-count/src/env"
 	"github.com/J-Leg/player-count/src/stats"
@@ -18,8 +17,7 @@ const (
 
 // Execute : Core execution for daily updates
 // Update all apps
-func Execute(ctx context.Context) {
-	var cfg *env.Config = env.InitConfig(ctx)
+func Execute(cfg *env.Config) {
 	var dbcfg db.Dbcfg = db.Dbcfg(*cfg)
 	cfg.Trace.Debug.Printf("initiate daily execution.\n")
 
@@ -46,14 +44,11 @@ func Execute(ctx context.Context) {
 	bar.Finish()
 	cfg.Trace.Debug.Printf("conclude daily execution.\n")
 
-	// Close
-	cfg.LoggerClient.Close()
 	return
 }
 
 // ExecuteMonthly : Monthly process
-func ExecuteMonthly(ctx context.Context) {
-	var cfg *env.Config = env.InitConfig(ctx)
+func ExecuteMonthly(cfg *env.Config) {
 	var dbcfg db.Dbcfg = db.Dbcfg(*cfg)
 	cfg.Trace.Debug.Printf("initiate monthly execution.\n")
 
@@ -89,14 +84,11 @@ func ExecuteMonthly(ctx context.Context) {
 	bar.Finish()
 	cfg.Trace.Debug.Printf("conclude monthly execution.\n")
 
-	// Close
-	cfg.LoggerClient.Close()
 	return
 }
 
 // ExecuteRecovery : Best effort to retry all exception instances
-func ExecuteRecovery(ctx context.Context) {
-	var cfg *env.Config = env.InitConfig(ctx)
+func ExecuteRecovery(cfg *env.Config) {
 	var dbcfg db.Dbcfg = db.Dbcfg(*cfg)
 	var appsToUpdate, err = dbcfg.GetExceptions()
 	if err != nil {
@@ -116,7 +108,7 @@ func ExecuteRecovery(ctx context.Context) {
 	}
 
 	cfg.Trace.Info.Printf("[Exceptions] recovery process complete.\n")
-	cfg.LoggerClient.Close()
+
 	return
 }
 
