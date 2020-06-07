@@ -30,6 +30,7 @@ func Execute(cfg *env.Config) {
 
 	appList, err := dbcfg.GetAppList()
 	if err != nil {
+		cfg.Trace.Error.Printf("failed to retrieve app list. %s", err)
 		return
 	}
 
