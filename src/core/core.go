@@ -12,56 +12,79 @@ import (
 
 // Constants
 const (
-	MONTHS = 12
+	MONTHS           = 12
+	FUNCTIONDURATION = 8
+
+	DAILY    = 0
+	MONTHLY  = 1
+	RECOVERY = 2
+
+	LIMIT = 50 // Max number of go-routines running concurrently
 )
 
 // Execute : Core execution for daily updates
 // Update all apps
 func Execute(cfg *env.Config) {
 	var dbcfg db.Dbcfg = db.Dbcfg(*cfg)
-	cfg.Trace.Debug.Printf("initiate daily execution.\n")
+	cfg.Trace.Debug.Printf("initiate daily execution.")
 
 	appList, err := dbcfg.GetAppList()
 	if err != nil {
 		return
 	}
 
-	bar := pb.StartNew(len(appList))
+	workChannel := make(chan bool)
+	timeout := time.After(FUNCTIONDURATION * time.Minute)
+
+	var numSuccess, numErrors int = 0, 0
+	var numApps int = len(appList)
+	var numBatches int = int(math.Ceil(float64(numApps / LIMIT)))
+
+	bar := pb.StartNew(numApps)
 	bar.SetRefreshRate(time.Second)
 	bar.SetWriter(os.Stdout)
 	bar.Start()
 
-	for _, app := range appList {
+	defer finalise(DAILY, &numSuccess, &numErrors, workChannel, bar, cfg)
 
-		// Update progress
-		bar.Increment()
-		time.Sleep(time.Millisecond)
-		err := processApp(&dbcfg, &app)
-		if err != nil {
-			continue
+	for i := 0; i <= numBatches; i++ {
+		startIdx := i * LIMIT
+		endIdx := min(startIdx+LIMIT, numApps)
+
+		for j := startIdx; j < endIdx; j++ {
+			go processApp(&dbcfg, appList[j], workChannel)
+		}
+
+		// Wait on communication received from each go routine
+		// For each item in the batch
+		for j := startIdx; j < endIdx; j++ {
+			select {
+			case msg := <-workChannel:
+				if msg {
+					numSuccess++
+				} else {
+					numErrors++
+				}
+			case <-timeout:
+				cfg.Trace.Info.Printf("Daily process runtime exceeding maximum duration.")
+				return
+			}
+			bar.Increment()
 		}
 	}
-	bar.Finish()
-	cfg.Trace.Debug.Printf("conclude daily execution.\n")
-
 	return
 }
 
 // ExecuteMonthly : Monthly process
 func ExecuteMonthly(cfg *env.Config) {
 	var dbcfg db.Dbcfg = db.Dbcfg(*cfg)
-	cfg.Trace.Debug.Printf("initiate monthly execution.\n")
+	cfg.Trace.Debug.Printf("initiate monthly execution.")
 
 	appList, err := dbcfg.GetAppList()
 	if err != nil {
 		cfg.Trace.Error.Printf("failed to retrieve app list. %s", err)
 		return
 	}
-
-	bar := pb.StartNew(len(appList))
-	bar.SetRefreshRate(time.Second)
-	bar.SetWriter(os.Stdout)
-	bar.Start()
 
 	currentDateTime := time.Now()
 	var monthToAvg time.Month = currentDateTime.Month() - 1
@@ -74,17 +97,64 @@ func ExecuteMonthly(cfg *env.Config) {
 		yearToAvg = currentDateTime.Year() - 1
 	}
 
-	for _, app := range appList {
-		// Update progress
-		bar.Increment()
-		time.Sleep(time.Millisecond)
+	workChannel := make(chan bool)
+	timeout := time.After(FUNCTIONDURATION * time.Minute)
 
-		processAppMonthly(&dbcfg, &app, monthToAvg, yearToAvg)
+	var numApps int = len(appList)
+	var numBatches int = int(math.Ceil(float64(numApps / LIMIT)))
+	var numSuccess, numErrors int = 0, 0
+
+	bar := pb.StartNew(numApps)
+	bar.SetRefreshRate(time.Second)
+	bar.SetWriter(os.Stdout)
+	bar.Start()
+
+	defer finalise(MONTHLY, &numSuccess, &numErrors, workChannel, bar, cfg)
+
+	for i := 0; i <= numBatches; i++ {
+		startIdx := i * LIMIT
+		endIdx := min(startIdx+LIMIT, numApps)
+
+		for j := startIdx; j < endIdx; j++ {
+			go processAppMonthly(&dbcfg, appList[j], monthToAvg, yearToAvg, workChannel)
+		}
+
+		// Wait on communication received from each go routine
+		// For each item in the batch
+		for j := startIdx; j < endIdx; j++ {
+			select {
+			case msg := <-workChannel:
+				if msg {
+					numSuccess++
+				} else {
+					numErrors++
+				}
+			case <-timeout:
+				cfg.Trace.Info.Printf("Monthly process runtime exceeding maximum duration.")
+				return
+			}
+			bar.Increment()
+		}
 	}
-	bar.Finish()
-	cfg.Trace.Debug.Printf("conclude monthly execution.\n")
-
 	return
+}
+
+func finalise(t int, numSuccess, numError *int, ch chan<- bool, bar *pb.ProgressBar, cfg *env.Config) {
+	close(ch)
+	bar.Finish()
+
+	var jobType string
+	if t == DAILY {
+		jobType = "daily"
+	} else if t == MONTHLY {
+		jobType = "monthly"
+	} else if t == RECOVERY {
+		jobType = "recovery"
+	} else {
+		cfg.Trace.Error.Printf("Invalid job type %d", t)
+	}
+
+	cfg.Trace.Info.Printf("%s execution REPORT:\n    success: %d\n    errors: %d", jobType, *numSuccess, *numError)
 }
 
 // ExecuteRecovery : Best effort to retry all exception instances
@@ -98,22 +168,60 @@ func ExecuteRecovery(cfg *env.Config) {
 
 	dbcfg.FlushExceptions()
 
-	cfg.Trace.Info.Printf("[Exceptions] re-do daily process.\n")
-	for _, app := range *appsToUpdate {
-		err = processApp(&dbcfg, &app)
-		if err != nil {
-			cfg.Trace.Error.Printf("Daily retry (%s) failed for app: %+v - %s", app.Date, app.Ref.ID, err)
-			continue
+	workChannel := make(chan bool)
+	timeout := time.After(FUNCTIONDURATION * time.Minute)
+
+	var numExceptions = len(*appsToUpdate)
+	var numBatches int = int(math.Ceil(float64(numExceptions / LIMIT)))
+	var numSuccess, numErrors int = 0, 0
+
+	bar := pb.StartNew(numExceptions)
+	bar.SetRefreshRate(time.Second)
+	bar.SetWriter(os.Stdout)
+	bar.Start()
+
+	defer finalise(RECOVERY, &numSuccess, &numErrors, workChannel, bar, cfg)
+
+	for i := 0; i <= numBatches; i++ {
+		startIdx := i * LIMIT
+		endIdx := min(startIdx+LIMIT, numExceptions)
+
+		for j := startIdx; j <= endIdx; j++ {
+			go processApp(&dbcfg, (*appsToUpdate)[j], workChannel)
+		}
+
+		for j := startIdx; j < endIdx; j++ {
+			select {
+			case msg := <-workChannel:
+				if msg {
+					numSuccess++
+				} else {
+					numErrors++
+				}
+			case <-timeout:
+				cfg.Trace.Info.Printf("Daily process runtime exceeding maximum duration.")
+				return
+			}
+			bar.Increment()
 		}
 	}
-
-	cfg.Trace.Info.Printf("[Exceptions] recovery process complete.\n")
-
+	close(workChannel)
+	cfg.Trace.Info.Printf("[Exceptions] recovery process complete.")
 	return
 }
 
-func processAppMonthly(cfg *db.Dbcfg, app *db.AppShadow, monthToAvg time.Month, yearToAvg int) {
-	cfg.Trace.Debug.Printf("monthly process on app: %s - id: %+v.\n", app.Ref.Name, app.Ref.ID)
+func processAppMonthly(
+	cfg *db.Dbcfg,
+	app db.AppShadow,
+	monthToAvg time.Month,
+	yearToAvg int,
+	ch chan<- bool) {
+
+	cfg.Trace.Debug.Printf("monthly process on app: %s - ID: %+v.", app.Ref.Name, app.Ref.ID)
+
+	var err error
+	defer workDone(ch, &err)
+
 	dailyMetricList, err := cfg.GetDailyList(app.Ref.ID)
 	if err != nil {
 		cfg.Trace.Error.Printf("Error retrieving daily metric: %s", err)
@@ -157,19 +265,19 @@ func processAppMonthly(cfg *db.Dbcfg, app *db.AppShadow, monthToAvg time.Month, 
 		newAverage = total / numCounted
 	}
 
-	cfg.Trace.Debug.Printf("Computed average player count of: %d on month: %d using %d dates.\n",
+	cfg.Trace.Debug.Printf("Computed average player count of: %d on month: %d using %d dates.",
 		newAverage, monthToAvg, numCounted)
 
 	err = cfg.UpdateDailyList(app.Ref.ID, &newDailyMetricList)
 	if err != nil {
-		cfg.Trace.Error.Printf("Error updating daily metric list: %s.\n", err)
+		cfg.Trace.Error.Printf("Error updating daily metric list: %s.", err)
 		return
 	}
 
 	var monthMetricListPtr *[]db.Metric
 	monthMetricListPtr, err = cfg.GetMonthlyList(app.Ref.ID)
 	if err != nil {
-		cfg.Trace.Error.Printf("Error retrieving month metrics: %s.\n", err)
+		cfg.Trace.Error.Printf("Error retrieving month metrics: %s.", err)
 		return
 	}
 
@@ -177,40 +285,53 @@ func processAppMonthly(cfg *db.Dbcfg, app *db.AppShadow, monthToAvg time.Month, 
 
 	monthMetricList := *monthMetricListPtr
 	previousMonthMetrics := &monthMetricList[len(monthMetricList)-1]
+
+	cfg.Trace.Info.Printf("Construct month element: month - %s, year - %d", monthToAvg.String(), yearToAvg)
+
 	newMonth := constructNewMonthMetric(previousMonthMetrics, newPeak, float64(newAverage), monthToAvg, yearToAvg)
 	monthMetricList = append(monthMetricList, *newMonth)
 
-	cfg.UpdateMonthlyList(app.Ref.ID, monthMetricListPtr)
+	cfg.UpdateMonthlyList(app.Ref.ID, &monthMetricList)
 	if err != nil {
-		cfg.Trace.Error.Printf("error updating month metric list %s.\n", err)
+		cfg.Trace.Error.Printf("error updating month metric list %s.", err)
 		return
 	}
 
-	cfg.Trace.Debug.Printf("monthly process success.\n")
+	cfg.Trace.Debug.Printf("monthly process success for app: %s - ID: %+v.", app.Ref.Name, app.Ref.ID)
 	return
 }
 
-func processApp(cfg *db.Dbcfg, app *db.AppShadow) error {
-	cfg.Trace.Debug.Printf("daily process on app: %s - id: %+v.\n", app.Ref.Name, app.Ref.ID)
+func processApp(cfg *db.Dbcfg, app db.AppShadow, ch chan<- bool) {
+	cfg.Trace.Debug.Printf("daily process on app: %s - id: %+v.", app.Ref.Name, app.Ref.ID)
+
+	var err error
+	defer workDone(ch, &err)
+
 	dm, err := stats.Fetch(app.Date, app.Ref.Domain, app.Ref.DomainID)
 	if err != nil {
-		err = cfg.PushException(app)
+		err = cfg.PushException(&app)
 		if err != nil {
-			cfg.Trace.Error.Printf("error inserting app %d to exception queue! %s\n", app.Ref.DomainID, err)
-			// What do?
+			cfg.Trace.Error.Printf("error inserting app %d to exception queue! %s", app.Ref.DomainID, err)
 		}
-		return err
+		return
 	}
 
 	err = cfg.PushDaily(app.Ref.ID, dm)
 	if err != nil {
-		err = cfg.PushException(app)
+		err = cfg.PushException(&app)
 		if err != nil {
-			cfg.Trace.Error.Printf("error inserting app %d to exception queue! %s\n", app.Ref.DomainID, err)
-			// What do?
+			cfg.Trace.Error.Printf("error inserting app %d to exception queue! %s", app.Ref.DomainID, err)
 		}
-		return err
+		return
 	}
-	cfg.Trace.Debug.Printf("daily process success on app: %s - id: %+v.\n", app.Ref.Name, app.Ref.ID)
-	return nil
+	cfg.Trace.Debug.Printf("daily process success on app: %s - id: %+v.", app.Ref.Name, app.Ref.ID)
+	return
+}
+
+func workDone(ch chan<- bool, err *error) {
+	if *err == nil {
+		ch <- true
+	} else {
+		ch <- false
+	}
 }

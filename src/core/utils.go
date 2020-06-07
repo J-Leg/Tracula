@@ -46,3 +46,10 @@ func constructNewMonthMetric(previous *db.Metric, peak float64, avg float64,
 
 	return &newMonthMetric
 }
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
