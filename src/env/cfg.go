@@ -25,6 +25,7 @@ type Config struct {
 	Db           *mongo.Database
 	Trace        *loggers
 	LoggerClient *logging.Client
+	LocalEnabled bool
 }
 
 // InitConfig - initialise config struct
@@ -37,6 +38,7 @@ func InitConfig(ctx context.Context, db *mongo.Database) *Config {
 		Db:           newDb,
 		Trace:        newLoggers,
 		LoggerClient: loggerClient,
+		LocalEnabled: false,
 	}
 
 	return &newConfig

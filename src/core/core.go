@@ -40,10 +40,13 @@ func Execute(cfg *env.Config) {
 	var numApps int = len(appList)
 	var numBatches int = int(math.Ceil(float64(numApps / LIMIT)))
 
-	bar := pb.StartNew(numApps)
-	bar.SetRefreshRate(time.Second)
-	bar.SetWriter(os.Stdout)
-	bar.Start()
+	var bar *pb.ProgressBar
+	if cfg.LocalEnabled {
+		bar = pb.StartNew(numApps)
+		bar.SetRefreshRate(time.Second)
+		bar.SetWriter(os.Stdout)
+		bar.Start()
+	}
 
 	defer finalise(DAILY, &numSuccess, &numErrors, workChannel, bar, cfg)
 
@@ -69,7 +72,9 @@ func Execute(cfg *env.Config) {
 				cfg.Trace.Info.Printf("Daily process runtime exceeding maximum duration.")
 				return
 			}
-			bar.Increment()
+			if cfg.LocalEnabled {
+				bar.Increment()
+			}
 		}
 	}
 	return
@@ -104,10 +109,13 @@ func ExecuteMonthly(cfg *env.Config) {
 	var numBatches int = int(math.Ceil(float64(numApps / LIMIT)))
 	var numSuccess, numErrors int = 0, 0
 
-	bar := pb.StartNew(numApps)
-	bar.SetRefreshRate(time.Second)
-	bar.SetWriter(os.Stdout)
-	bar.Start()
+	var bar *pb.ProgressBar
+	if cfg.LocalEnabled {
+		bar = pb.StartNew(numApps)
+		bar.SetRefreshRate(time.Second)
+		bar.SetWriter(os.Stdout)
+		bar.Start()
+	}
 
 	defer finalise(MONTHLY, &numSuccess, &numErrors, workChannel, bar, cfg)
 
@@ -133,7 +141,9 @@ func ExecuteMonthly(cfg *env.Config) {
 				cfg.Trace.Info.Printf("Monthly process runtime exceeding maximum duration.")
 				return
 			}
-			bar.Increment()
+			if cfg.LocalEnabled {
+				bar.Increment()
+			}
 		}
 	}
 	return
@@ -141,7 +151,10 @@ func ExecuteMonthly(cfg *env.Config) {
 
 func finalise(t int, numSuccess, numError *int, ch chan<- bool, bar *pb.ProgressBar, cfg *env.Config) {
 	close(ch)
-	bar.Finish()
+
+	if cfg.LocalEnabled {
+		bar.Finish()
+	}
 
 	var jobType string
 	if t == DAILY {
@@ -175,10 +188,13 @@ func ExecuteRecovery(cfg *env.Config) {
 	var numBatches int = int(math.Ceil(float64(numExceptions / LIMIT)))
 	var numSuccess, numErrors int = 0, 0
 
-	bar := pb.StartNew(numExceptions)
-	bar.SetRefreshRate(time.Second)
-	bar.SetWriter(os.Stdout)
-	bar.Start()
+	var bar *pb.ProgressBar
+	if cfg.LocalEnabled {
+		bar = pb.StartNew(numExceptions)
+		bar.SetRefreshRate(time.Second)
+		bar.SetWriter(os.Stdout)
+		bar.Start()
+	}
 
 	defer finalise(RECOVERY, &numSuccess, &numErrors, workChannel, bar, cfg)
 
@@ -202,7 +218,10 @@ func ExecuteRecovery(cfg *env.Config) {
 				cfg.Trace.Info.Printf("Daily process runtime exceeding maximum duration.")
 				return
 			}
-			bar.Increment()
+
+			if cfg.LocalEnabled {
+				bar.Increment()
+			}
 		}
 	}
 	close(workChannel)
