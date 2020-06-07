@@ -12,8 +12,14 @@ import (
 
 // Constants
 const (
-	MONTHS   = 12
-	DURATION = 8
+	MONTHS           = 12
+	FUNCTIONDURATION = 8
+
+	DAILY    = 0
+	MONTHLY  = 1
+	RECOVERY = 2
+
+	LIMIT = 50 // Max number of go-routines running concurrently
 )
 
 // Execute : Core execution for daily updates
@@ -27,24 +33,45 @@ func Execute(cfg *env.Config) {
 		return
 	}
 
-	bar := pb.StartNew(len(appList))
+	workChannel := make(chan bool)
+	timeout := time.After(FUNCTIONDURATION * time.Minute)
+
+	var numSuccess, numErrors int = 0, 0
+	var numApps int = len(appList)
+	var numBatches int = int(math.Ceil(float64(numApps / LIMIT)))
+
+	bar := pb.StartNew(numApps)
 	bar.SetRefreshRate(time.Second)
 	bar.SetWriter(os.Stdout)
 	bar.Start()
 
-	for _, app := range appList {
+	defer finalise(DAILY, &numSuccess, &numErrors, workChannel, bar, cfg)
 
-		// Update progress
-		bar.Increment()
-		time.Sleep(time.Millisecond)
-		err := processApp(&dbcfg, &app)
-		if err != nil {
-			continue
+	for i := 0; i <= numBatches; i++ {
+		startIdx := i * LIMIT
+		endIdx := min(startIdx+LIMIT, numApps)
+
+		for j := startIdx; j < endIdx; j++ {
+			go processApp(&dbcfg, appList[j], workChannel)
+		}
+
+		// Wait on communication received from each go routine
+		// For each item in the batch
+		for j := startIdx; j < endIdx; j++ {
+			select {
+			case msg := <-workChannel:
+				if msg {
+					numSuccess++
+				} else {
+					numErrors++
+				}
+			case <-timeout:
+				cfg.Trace.Info.Printf("Daily process runtime exceeding maximum duration.")
+				return
+			}
+			bar.Increment()
 		}
 	}
-	bar.Finish()
-	cfg.Trace.Debug.Printf("conclude daily execution.")
-
 	return
 }
 
@@ -71,43 +98,63 @@ func ExecuteMonthly(cfg *env.Config) {
 	}
 
 	workChannel := make(chan bool)
+	timeout := time.After(FUNCTIONDURATION * time.Minute)
 
-	for _, app := range appList {
-		go processAppMonthly(&dbcfg, app, monthToAvg, yearToAvg, workChannel)
-	}
+	var numApps int = len(appList)
+	var numBatches int = int(math.Ceil(float64(numApps / LIMIT)))
+	var numSuccess, numErrors int = 0, 0
 
-	// Progress
-	bar := pb.StartNew(len(appList))
+	bar := pb.StartNew(numApps)
 	bar.SetRefreshRate(time.Second)
 	bar.SetWriter(os.Stdout)
 	bar.Start()
 
-	var numSuccess, numErrors int = 0, 0
-	defer finalise(&numSuccess, &numErrors, workChannel, bar, cfg)
+	defer finalise(MONTHLY, &numSuccess, &numErrors, workChannel, bar, cfg)
 
-	timeout := time.After(DURATION * time.Minute)
+	for i := 0; i <= numBatches; i++ {
+		startIdx := i * LIMIT
+		endIdx := min(startIdx+LIMIT, numApps)
 
-	for i := 0; i < len(appList); i++ {
-		bar.Increment()
-		select {
-		case msg := <-workChannel:
-			if msg {
-				numSuccess++
-			} else {
-				numErrors++
+		for j := startIdx; j < endIdx; j++ {
+			go processAppMonthly(&dbcfg, appList[j], monthToAvg, yearToAvg, workChannel)
+		}
+
+		// Wait on communication received from each go routine
+		// For each item in the batch
+		for j := startIdx; j < endIdx; j++ {
+			select {
+			case msg := <-workChannel:
+				if msg {
+					numSuccess++
+				} else {
+					numErrors++
+				}
+			case <-timeout:
+				cfg.Trace.Info.Printf("Monthly process runtime exceeding maximum duration.")
+				return
 			}
-		case <-timeout:
-			cfg.Trace.Info.Printf("Monthly process runtime exceeding maximum duration.")
-			return
+			bar.Increment()
 		}
 	}
 	return
 }
 
-func finalise(numSuccess, numError *int, ch chan<- bool, bar *pb.ProgressBar, cfg *env.Config) {
+func finalise(t int, numSuccess, numError *int, ch chan<- bool, bar *pb.ProgressBar, cfg *env.Config) {
 	close(ch)
 	bar.Finish()
-	cfg.Trace.Info.Printf("conclude monthly execution.\nREPORT: \n    success: %d\n"+"    errors: %d", *numSuccess, *numError)
+
+	var jobType string
+	if t == DAILY {
+		jobType = "daily"
+	} else if t == MONTHLY {
+		jobType = "monthly"
+	} else if t == RECOVERY {
+		jobType = "recovery"
+	} else {
+		cfg.Trace.Error.Printf("Invalid job type %d", t)
+	}
+
+	cfg.Trace.Info.Printf("%s execution REPORT:\n    success: %d\n    errors: %d", jobType, *numSuccess, *numError)
 }
 
 // ExecuteRecovery : Best effort to retry all exception instances
@@ -121,17 +168,45 @@ func ExecuteRecovery(cfg *env.Config) {
 
 	dbcfg.FlushExceptions()
 
-	cfg.Trace.Info.Printf("[Exceptions] re-do daily process.")
-	for _, app := range *appsToUpdate {
-		err = processApp(&dbcfg, &app)
-		if err != nil {
-			cfg.Trace.Error.Printf("Daily retry (%s) failed for app: %+v - %s", app.Date, app.Ref.ID, err)
-			continue
+	workChannel := make(chan bool)
+	timeout := time.After(FUNCTIONDURATION * time.Minute)
+
+	var numExceptions = len(*appsToUpdate)
+	var numBatches int = int(math.Ceil(float64(numExceptions / LIMIT)))
+	var numSuccess, numErrors int = 0, 0
+
+	bar := pb.StartNew(numExceptions)
+	bar.SetRefreshRate(time.Second)
+	bar.SetWriter(os.Stdout)
+	bar.Start()
+
+	defer finalise(RECOVERY, &numSuccess, &numErrors, workChannel, bar, cfg)
+
+	for i := 0; i <= numBatches; i++ {
+		startIdx := i * LIMIT
+		endIdx := min(startIdx+LIMIT, numExceptions)
+
+		for j := startIdx; j <= endIdx; j++ {
+			go processApp(&dbcfg, (*appsToUpdate)[j], workChannel)
+		}
+
+		for j := startIdx; j < endIdx; j++ {
+			select {
+			case msg := <-workChannel:
+				if msg {
+					numSuccess++
+				} else {
+					numErrors++
+				}
+			case <-timeout:
+				cfg.Trace.Info.Printf("Daily process runtime exceeding maximum duration.")
+				return
+			}
+			bar.Increment()
 		}
 	}
-
+	close(workChannel)
 	cfg.Trace.Info.Printf("[Exceptions] recovery process complete.")
-
 	return
 }
 
@@ -226,29 +301,31 @@ func processAppMonthly(
 	return
 }
 
-func processApp(cfg *db.Dbcfg, app *db.AppShadow) error {
+func processApp(cfg *db.Dbcfg, app db.AppShadow, ch chan<- bool) {
 	cfg.Trace.Debug.Printf("daily process on app: %s - id: %+v.", app.Ref.Name, app.Ref.ID)
+
+	var err error
+	defer workDone(ch, &err)
+
 	dm, err := stats.Fetch(app.Date, app.Ref.Domain, app.Ref.DomainID)
 	if err != nil {
-		err = cfg.PushException(app)
+		err = cfg.PushException(&app)
 		if err != nil {
 			cfg.Trace.Error.Printf("error inserting app %d to exception queue! %s", app.Ref.DomainID, err)
-			// What do?
 		}
-		return err
+		return
 	}
 
 	err = cfg.PushDaily(app.Ref.ID, dm)
 	if err != nil {
-		err = cfg.PushException(app)
+		err = cfg.PushException(&app)
 		if err != nil {
 			cfg.Trace.Error.Printf("error inserting app %d to exception queue! %s", app.Ref.DomainID, err)
-			// What do?
 		}
-		return err
+		return
 	}
 	cfg.Trace.Debug.Printf("daily process success on app: %s - id: %+v.", app.Ref.Name, app.Ref.ID)
-	return nil
+	return
 }
 
 func workDone(ch chan<- bool, err *error) {
