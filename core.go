@@ -1,9 +1,7 @@
-package core
+package pc
 
 import (
-	"github.com/J-Leg/player-count/src/db"
-	"github.com/J-Leg/player-count/src/env"
-	"github.com/J-Leg/player-count/src/stats"
+	"github.com/J-Leg/player-count/internal/stats"
 	"github.com/cheggaaa/pb/v3"
 	"math"
 	"os"
@@ -19,16 +17,15 @@ const (
 	MONTHLY  = 1
 	RECOVERY = 2
 
-	LIMIT = 50 // Max number of go-routines running concurrently
+	ROUTINELIMIT = 50 // Max number of go-routines running concurrently
 )
 
 // Execute : Core execution for daily updates
 // Update all apps
-func Execute(cfg *env.Config) {
-	var dbcfg db.Dbcfg = db.Dbcfg(*cfg)
+func Execute(cfg *Config) {
 	cfg.Trace.Debug.Printf("initiate daily execution.")
 
-	appList, err := dbcfg.GetAppList()
+	appList, err := cfg.GetAppList()
 	if err != nil {
 		cfg.Trace.Error.Printf("failed to retrieve app list. %s", err)
 		return
@@ -39,7 +36,7 @@ func Execute(cfg *env.Config) {
 
 	var numSuccess, numErrors int = 0, 0
 	var numApps int = len(appList)
-	var numBatches int = int(math.Ceil(float64(numApps / LIMIT)))
+	var numBatches int = int(math.Ceil(float64(numApps / ROUTINELIMIT)))
 
 	var bar *pb.ProgressBar
 	if cfg.LocalEnabled {
@@ -52,11 +49,11 @@ func Execute(cfg *env.Config) {
 	defer finalise(DAILY, &numSuccess, &numErrors, workChannel, bar, cfg)
 
 	for i := 0; i <= numBatches; i++ {
-		startIdx := i * LIMIT
-		endIdx := min(startIdx+LIMIT, numApps)
+		startIdx := i * ROUTINELIMIT
+		endIdx := min(startIdx+ROUTINELIMIT, numApps)
 
 		for j := startIdx; j < endIdx; j++ {
-			go processApp(&dbcfg, appList[j], workChannel)
+			go processApp(cfg, appList[j], workChannel)
 		}
 
 		// Wait on communication received from each go routine
@@ -82,11 +79,9 @@ func Execute(cfg *env.Config) {
 }
 
 // ExecuteMonthly : Monthly process
-func ExecuteMonthly(cfg *env.Config) {
-	var dbcfg db.Dbcfg = db.Dbcfg(*cfg)
+func ExecuteMonthly(cfg *Config) {
 	cfg.Trace.Debug.Printf("initiate monthly execution.")
-
-	appList, err := dbcfg.GetAppList()
+	appList, err := cfg.GetAppList()
 	if err != nil {
 		cfg.Trace.Error.Printf("failed to retrieve app list. %s", err)
 		return
@@ -107,7 +102,7 @@ func ExecuteMonthly(cfg *env.Config) {
 	timeout := time.After(FUNCTIONDURATION * time.Minute)
 
 	var numApps int = len(appList)
-	var numBatches int = int(math.Ceil(float64(numApps / LIMIT)))
+	var numBatches int = int(math.Ceil(float64(numApps / ROUTINELIMIT)))
 	var numSuccess, numErrors int = 0, 0
 
 	var bar *pb.ProgressBar
@@ -121,11 +116,11 @@ func ExecuteMonthly(cfg *env.Config) {
 	defer finalise(MONTHLY, &numSuccess, &numErrors, workChannel, bar, cfg)
 
 	for i := 0; i <= numBatches; i++ {
-		startIdx := i * LIMIT
-		endIdx := min(startIdx+LIMIT, numApps)
+		startIdx := i * ROUTINELIMIT
+		endIdx := min(startIdx+ROUTINELIMIT, numApps)
 
 		for j := startIdx; j < endIdx; j++ {
-			go processAppMonthly(&dbcfg, appList[j], monthToAvg, yearToAvg, workChannel)
+			go processAppMonthly(cfg, appList[j], monthToAvg, yearToAvg, workChannel)
 		}
 
 		// Wait on communication received from each go routine
@@ -150,7 +145,7 @@ func ExecuteMonthly(cfg *env.Config) {
 	return
 }
 
-func finalise(t int, numSuccess, numError *int, ch chan<- bool, bar *pb.ProgressBar, cfg *env.Config) {
+func finalise(t int, numSuccess, numError *int, ch chan<- bool, bar *pb.ProgressBar, cfg *Config) {
 	close(ch)
 
 	if cfg.LocalEnabled {
@@ -172,21 +167,20 @@ func finalise(t int, numSuccess, numError *int, ch chan<- bool, bar *pb.Progress
 }
 
 // ExecuteRecovery : Best effort to retry all exception instances
-func ExecuteRecovery(cfg *env.Config) {
-	var dbcfg db.Dbcfg = db.Dbcfg(*cfg)
-	var appsToUpdate, err = dbcfg.GetExceptions()
+func ExecuteRecovery(cfg *Config) {
+	var appsToUpdate, err = cfg.GetExceptions()
 	if err != nil {
 		cfg.Trace.Error.Printf("Error retrieving exceptions. %s", err)
 		return
 	}
 
-	dbcfg.FlushExceptions()
+	cfg.FlushExceptions()
 
 	workChannel := make(chan bool)
 	timeout := time.After(FUNCTIONDURATION * time.Minute)
 
 	var numExceptions = len(*appsToUpdate)
-	var numBatches int = int(math.Ceil(float64(numExceptions / LIMIT)))
+	var numBatches int = int(math.Ceil(float64(numExceptions / ROUTINELIMIT)))
 	var numSuccess, numErrors int = 0, 0
 
 	var bar *pb.ProgressBar
@@ -200,11 +194,11 @@ func ExecuteRecovery(cfg *env.Config) {
 	defer finalise(RECOVERY, &numSuccess, &numErrors, workChannel, bar, cfg)
 
 	for i := 0; i <= numBatches; i++ {
-		startIdx := i * LIMIT
-		endIdx := min(startIdx+LIMIT, numExceptions)
+		startIdx := i * ROUTINELIMIT
+		endIdx := min(startIdx+ROUTINELIMIT, numExceptions)
 
 		for j := startIdx; j <= endIdx; j++ {
-			go processApp(&dbcfg, (*appsToUpdate)[j], workChannel)
+			go processApp(cfg, (*appsToUpdate)[j], workChannel)
 		}
 
 		for j := startIdx; j < endIdx; j++ {
@@ -231,8 +225,8 @@ func ExecuteRecovery(cfg *env.Config) {
 }
 
 func processAppMonthly(
-	cfg *db.Dbcfg,
-	app db.AppShadow,
+	cfg *Config,
+	app AppShadow,
 	monthToAvg time.Month,
 	yearToAvg int,
 	ch chan<- bool) {
@@ -248,7 +242,7 @@ func processAppMonthly(
 		return
 	}
 	// Initialise a new list
-	var newDailyMetricList []stats.DailyMetric
+	var newDailyMetricList []DailyMetric
 
 	var total int = 0
 	var numCounted int = 0
@@ -294,7 +288,7 @@ func processAppMonthly(
 		return
 	}
 
-	var monthMetricListPtr *[]db.Metric
+	var monthMetricListPtr *[]Metric
 	monthMetricListPtr, err = cfg.GetMonthlyList(app.Ref.ID)
 	if err != nil {
 		cfg.Trace.Error.Printf("Error retrieving month metrics: %s.", err)
@@ -321,14 +315,15 @@ func processAppMonthly(
 	return
 }
 
-func processApp(cfg *db.Dbcfg, app db.AppShadow, ch chan<- bool) {
+func processApp(cfg *Config, app AppShadow, ch chan<- bool) {
 	cfg.Trace.Debug.Printf("daily process on app: %s - id: %+v.", app.Ref.Name, app.Ref.ID)
 
 	var err error
 	defer workDone(ch, &err)
 
-	dm, err := stats.Fetch(app.Date, app.Ref.Domain, app.Ref.DomainID)
+	population, err := stats.Fetch(app.Ref.Domain, app.Ref.DomainID)
 	if err != nil {
+		cfg.Trace.Error.Printf("Error fetch population for app %s! %s", app.Ref.Name, err)
 		err = cfg.PushException(&app)
 		if err != nil {
 			cfg.Trace.Error.Printf("error inserting app %d to exception queue! %s", app.Ref.DomainID, err)
@@ -336,7 +331,7 @@ func processApp(cfg *db.Dbcfg, app db.AppShadow, ch chan<- bool) {
 		return
 	}
 
-	err = cfg.PushDaily(app.Ref.ID, dm)
+	err = cfg.PushDaily(app.Ref.ID, &DailyMetric{Date: app.Date, PlayerCount: population})
 	if err != nil {
 		err = cfg.PushException(&app)
 		if err != nil {

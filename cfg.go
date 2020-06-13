@@ -1,4 +1,4 @@
-package env
+package pc
 
 import (
 	"cloud.google.com/go/logging"
@@ -8,34 +8,33 @@ import (
 	"os"
 )
 
-// Constants
-const (
-	DBTIMEOUT = 5
-)
-
 type loggers struct {
 	Info  *log.Logger
 	Debug *log.Logger
 	Error *log.Logger
 }
 
+// Collections struct containing MongoDB collections to be used
+type Collections struct {
+	Stats      *mongo.Collection
+	Exceptions *mongo.Collection
+}
+
 // Config for execution
 type Config struct {
 	Ctx          context.Context
-	Db           *mongo.Database
+	Col          *Collections
 	Trace        *loggers
 	LoggerClient *logging.Client
 	LocalEnabled bool
 }
 
-// InitConfig - initialise config struct
-func InitConfig(ctx context.Context, db *mongo.Database) *Config {
-	newDb := db
-
+// InitConfig - initialise config struct and return pointer to it
+func InitConfig(ctx context.Context, cols *Collections) *Config {
 	newLoggers, loggerClient := initCloudLoggers(ctx)
 	newConfig := Config{
 		Ctx:          ctx,
-		Db:           newDb,
+		Col:          cols,
 		Trace:        newLoggers,
 		LoggerClient: loggerClient,
 		LocalEnabled: false,

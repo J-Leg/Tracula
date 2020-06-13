@@ -1,13 +1,12 @@
-package core
+package pc
 
 import (
 	"fmt"
-	"github.com/J-Leg/player-count/src/db"
 	"sort"
 	"time"
 )
 
-func monthSort(listPtr *[]db.Metric) {
+func monthSort(listPtr *[]Metric) {
 	list := *listPtr
 	if sort.SliceIsSorted(list, func(i int, j int) bool {
 		return list[i].Date.Before(list[j].Date)
@@ -20,8 +19,8 @@ func monthSort(listPtr *[]db.Metric) {
 	})
 }
 
-func constructNewMonthMetric(previous *db.Metric, peak float64, avg float64,
-	month time.Month, year int) *db.Metric {
+func constructNewMonthMetric(previous *Metric, peak float64, avg float64,
+	month time.Month, year int) *Metric {
 
 	var gainStr string
 	var gainPcStr string
@@ -36,7 +35,7 @@ func constructNewMonthMetric(previous *db.Metric, peak float64, avg float64,
 	}
 
 	// Construct new month metric
-	var newMonthMetric = db.Metric{
+	var newMonthMetric = Metric{
 		Date:        time.Date(year, month, 1, 0, 0, 0, 0, time.UTC),
 		AvgPlayers:  int(avg),
 		Gain:        gainStr,
