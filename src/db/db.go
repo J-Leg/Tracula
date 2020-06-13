@@ -1,13 +1,13 @@
 package db
 
 import (
+	"github.com/J-Leg/player-count/src/env"
+	"github.com/J-Leg/player-count/src/stats" // Way to clear this?
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"log"
-	"github.com/J-Leg/player-count/src/env"
-	"github.com/J-Leg/player-count/src/stats" // Way to clear this?
 	"time"
 )
 
