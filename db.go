@@ -74,7 +74,7 @@ type Db interface {
 	PushMonthly(id primitive.ObjectID, element *Metric) error
 	PushException(app *AppShadow) error
 
-	UpdateMonthlyList(id primitive.ObjectID, newMetricList *[]Metric) error
+	UpdateApp(id primitive.ObjectID, newMetricList *[]Metric) error
 	UpdateDailyList(id primitive.ObjectID, newMetricList *[]DailyMetric) error
 
 	FlushExceptions()
@@ -174,12 +174,17 @@ func (cfg Config) PushException(app *AppShadow) error {
 	return nil
 }
 
-// UpdateMonthlyList : update list
-func (cfg Config) UpdateMonthlyList(id primitive.ObjectID, newMetricList *[]Metric) error {
-	cfg.Trace.Debug.Printf("[PlayerCount Collection] updating monthly metric list - App: %s.\n", id.String())
+// UpdateApp : Update app
+func (cfg Config) UpdateApp(app *App) error {
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] updating App: %s.\n", app.ID.String())
 
-	match := bson.M{"_id": id}
-	action := bson.M{"$set": bson.M{"metrics": *newMetricList}}
+	match := bson.M{"_id": app.ID}
+	update := bson.M{
+		"metrics":       app.Metrics,
+		"daily_metrics": app.DailyMetrics,
+	}
+	action := bson.M{"$set": update}
+
 	res, err := cfg.Col.Stats.UpdateOne(cfg.Ctx, match, action)
 	if err != nil {
 		return err
@@ -213,7 +218,8 @@ func (cfg Config) GetMonthlyList(id primitive.ObjectID) (*[]Metric, error) {
 	return &monthlyMetricList, nil
 }
 
-// GetDailyList : Fetch all daily metrics
+// GetDailyList retrives a list of daily metrics for input app
+// UNUSED
 func (cfg Config) GetDailyList(id primitive.ObjectID) (*[]DailyMetric, error) {
 	cfg.Trace.Debug.Printf("[PlayerCount Collection] retrieving daily metric list for app %s.\n", id.String())
 	var result App
@@ -229,6 +235,24 @@ func (cfg Config) GetDailyList(id primitive.ObjectID) (*[]DailyMetric, error) {
 	}
 	cfg.Trace.Debug.Printf("[PlayerCount Collection] retrieval success.\n")
 	return &result.DailyMetrics, nil
+}
+
+// GetApp retrieves the entire document and returns it as an struct app
+func (cfg Config) GetApp(id primitive.ObjectID) (*App, error) {
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] retrieving daily metric list for app %s.\n", id.String())
+
+	var result App
+	match := bson.M{"_id": id}
+	err := cfg.Col.Stats.FindOne(cfg.Ctx, match).Decode(&result)
+	if err != nil {
+		log.Printf("Error retrieving document from DB: %s\n", err)
+		if err == mongo.ErrNoDocuments {
+			log.Printf("ID %s does not exist in Stats DB.\n", id.String())
+		}
+		return nil, err
+	}
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] retrieval success.\n")
+	return &result, nil
 }
 
 // UpdateDailyList : Update daily metric list for app

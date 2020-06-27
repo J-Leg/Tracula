@@ -230,84 +230,32 @@ func processAppMonthly(
 	monthToAvg time.Month,
 	yearToAvg int,
 	ch chan<- bool) {
-
 	cfg.Trace.Debug.Printf("monthly process on app: %s - ID: %+v.", app.Ref.Name, app.Ref.ID)
 
 	var err error
 	defer workDone(ch, &err)
 
-	dailyMetricList, err := cfg.GetDailyList(app.Ref.ID)
+	appBom, err := cfg.GetApp(app.Ref.ID)
 	if err != nil {
 		cfg.Trace.Error.Printf("Error retrieving daily metric: %s", err)
 		return
 	}
-	// Initialise a new list
-	var newDailyMetricList []DailyMetric
 
-	var total int = 0
-	var numCounted int = 0
-	var newPeak float64 = 0
+	newDailyMetricList, newPeak, newAverage := monthlySanitise(appBom, monthToAvg, yearToAvg)
+	appBom.DailyMetrics = *newDailyMetricList
+	cfg.Trace.Debug.Printf("Computed monthly average %d, for app %s", newAverage, app.Ref.Name)
 
-	for _, dailyMetric := range *dailyMetricList {
-		var elementMonth = dailyMetric.Date.Month()
-		var elementYear = dailyMetric.Date.Year()
-		var monthDiff = monthToAvg - elementMonth
-
-		// Only keep daily metrics up to the last 3 months
-		// This condition "should" be enough if older months were correctly purged
-		if (monthDiff+MONTHS)%MONTHS < 3 {
-
-			// Secondary conidition is just for assurance
-			if monthDiff < 0 && (elementYear != yearToAvg-1) {
-				continue
-			}
-
-			newDailyMetricList = append(newDailyMetricList, dailyMetric)
-		}
-
-		if elementMonth != monthToAvg {
-			continue
-		}
-
-		newPeak = math.Max(newPeak, float64(dailyMetric.PlayerCount))
-		total += dailyMetric.PlayerCount
-		numCounted++
-	}
-
-	var newAverage int = 0
-	if numCounted > 0 {
-		newAverage = total / numCounted
-	}
-
-	cfg.Trace.Debug.Printf("Computed average player count of: %d on month: %d using %d dates.",
-		newAverage, monthToAvg, numCounted)
-
-	err = cfg.UpdateDailyList(app.Ref.ID, &newDailyMetricList)
-	if err != nil {
-		cfg.Trace.Error.Printf("Error updating daily metric list: %s.", err)
-		return
-	}
-
-	var monthMetricListPtr *[]Metric
-	monthMetricListPtr, err = cfg.GetMonthlyList(app.Ref.ID)
-	if err != nil {
-		cfg.Trace.Error.Printf("Error retrieving month metrics: %s.", err)
-		return
-	}
-
-	monthSort(monthMetricListPtr)
-
-	monthMetricList := *monthMetricListPtr
-	previousMonthMetrics := &monthMetricList[len(monthMetricList)-1]
+	sortDates(&appBom.Metrics)
+	previousMonthMetrics := appBom.Metrics[len(appBom.Metrics)-1]
 
 	cfg.Trace.Info.Printf("Construct month element: month - %s, year - %d", monthToAvg.String(), yearToAvg)
 
-	newMonth := constructNewMonthMetric(previousMonthMetrics, newPeak, float64(newAverage), monthToAvg, yearToAvg)
-	monthMetricList = append(monthMetricList, *newMonth)
+	newMonth := constructNewMonthMetric(&previousMonthMetrics, newPeak, newAverage, monthToAvg, yearToAvg)
+	appBom.Metrics = append(appBom.Metrics, *newMonth)
 
-	cfg.UpdateMonthlyList(app.Ref.ID, &monthMetricList)
+	err = cfg.UpdateApp(appBom)
 	if err != nil {
-		cfg.Trace.Error.Printf("error updating month metric list %s.", err)
+		cfg.Trace.Error.Printf("Error updating app %s. %s", app.Ref.Name, err)
 		return
 	}
 
