@@ -1,11 +1,11 @@
-## Player Count
+## Tracula
 A simple package to collect and organise game population data.  
 Ideally used for batch updates for game tracking apps.
 
 ## Installation
 
 ```
-go get github.com/J-leg/player-count
+go get github.com/J-leg/Tracula
 ```
 
 ### Usage
