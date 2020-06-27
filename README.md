@@ -5,7 +5,7 @@ Ideally used for creating batch processes in game tracking apps.
 ## Installation
 
 ```
-go get github.com/J-leg/Tracula
+go get github.com/J-leg/tracula
 ```
 
 ### Usage
