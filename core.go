@@ -1,7 +1,7 @@
-package pc
+package tracula
 
 import (
-	"github.com/J-Leg/player-count/internal/stats"
+	"github.com/J-Leg/tracula/internal/stats"
 	"github.com/cheggaaa/pb/v3"
 	"math"
 	"os"

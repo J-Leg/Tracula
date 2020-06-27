@@ -1,4 +1,4 @@
-module github.com/J-Leg/player-count
+module github.com/J-Leg/tracula
 
 go 1.13
 

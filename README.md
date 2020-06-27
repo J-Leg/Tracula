@@ -1,6 +1,6 @@
-## Tracula
+## tracula
 A simple package to collect and organise game population data.  
-Ideally used for batch updates for game tracking apps.
+Ideally used for creating batch processes in game tracking apps.
 
 ## Installation
 

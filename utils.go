@@ -1,4 +1,4 @@
-package pc
+package tracula
 
 import (
 	"fmt"
