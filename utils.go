@@ -6,6 +6,11 @@ import (
 	"time"
 )
 
+const (
+	HOURSPERDAY    = 24
+	RETENTIONLIMIT = 90
+)
+
 // Current handles two types of data: Metric and DailyMetric
 // Duplicate code still exists but at least it exists as a single function
 // Perhaps look into a better way to do this; polymorphism
@@ -36,7 +41,7 @@ func sortDates(m interface{}) {
 	}
 }
 
-func monthlySanitise(appBom *App, monthToAvg time.Month, yearToAvg int) (*[]DailyMetric, int, int) {
+func monthlySanitise(appBom *App, currentDateTime *time.Time) (*[]DailyMetric, int, int) {
 	// Initialise a new list to be stored
 	var newDailyMetricList []DailyMetric
 
@@ -44,29 +49,28 @@ func monthlySanitise(appBom *App, monthToAvg time.Month, yearToAvg int) (*[]Dail
 	var numCounted int = 0
 	var newPeak int = 0
 
+	// Criteria for including metric in the monthly calculation:
+	// 1. Before today's date
+	// 2. Element month = current month - 1 (normally this process called on the first day of the month)
+	targetMonth := currentDateTime.Month() - 1
+	if targetMonth == 0 {
+		targetMonth = time.December
+	}
+
+	// Criteria for purge:
+	// 1. day difference <= RETENTIONLIMIT
 	for _, dailyMetric := range (*appBom).DailyMetrics {
-		var elementMonth = dailyMetric.Date.Month()
-		var elementYear = dailyMetric.Date.Year()
-		var monthDiff = monthToAvg - elementMonth
 
-		// Only keep daily metrics up to the last 3 months
-		// This condition "should" be enough if older months were correctly purged
-		if (monthDiff+MONTHS)%MONTHS < 3 {
-
-			// Secondary conidition is just for assurance
-			if monthDiff < 0 && (elementYear != yearToAvg-1) {
-				continue
-			}
-			newDailyMetricList = append(newDailyMetricList, dailyMetric)
-		}
-
-		if elementMonth != monthToAvg {
+		if dayDiff(currentDateTime, &dailyMetric.Date) >= 90 {
 			continue
 		}
 
-		newPeak = max(newPeak, dailyMetric.PlayerCount)
-		total += dailyMetric.PlayerCount
-		numCounted++
+		if targetMonth == dailyMetric.Date.Month() {
+			newPeak = max(newPeak, dailyMetric.PlayerCount)
+			total += dailyMetric.PlayerCount
+			numCounted++
+		}
+		newDailyMetricList = append(newDailyMetricList, dailyMetric)
 	}
 
 	sortDates(newDailyMetricList)
@@ -78,8 +82,13 @@ func monthlySanitise(appBom *App, monthToAvg time.Month, yearToAvg int) (*[]Dail
 	return &newDailyMetricList, newPeak, newAverage
 }
 
-func constructNewMonthMetric(previous *Metric, peak int, avg int,
-	month time.Month, year int) *Metric {
+// dayDiff calculates the number of days from : a - b
+// Assumption that there are 24 hours in a day
+func dayDiff(a, b *time.Time) int {
+	return int(a.Sub(*b).Hours() / HOURSPERDAY)
+}
+
+func constructNewMonthMetric(previous *Metric, peak int, avg int, cdt *time.Time) *Metric {
 
 	var gainStr string = "-"
 	var gainPcStr string = "-"
@@ -94,7 +103,7 @@ func constructNewMonthMetric(previous *Metric, peak int, avg int,
 
 	// Construct new month metric
 	var newMonthMetric = Metric{
-		Date:        time.Date(year, month, 1, 0, 0, 0, 0, time.UTC),
+		Date:        time.Date(cdt.Year(), cdt.Month(), 1, 0, 0, 0, 0, time.UTC),
 		AvgPlayers:  avg,
 		Gain:        gainStr,
 		GainPercent: gainPcStr,
