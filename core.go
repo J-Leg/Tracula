@@ -87,16 +87,7 @@ func ExecuteMonthly(cfg *Config) {
 		return
 	}
 
-	currentDateTime := time.Now()
-	var monthToAvg time.Month = currentDateTime.Month() - 1
-	if currentDateTime.Month() == 1 {
-		monthToAvg = 12
-	}
-
-	var yearToAvg int = currentDateTime.Year()
-	if currentDateTime.Month() == 1 {
-		yearToAvg = currentDateTime.Year() - 1
-	}
+	var currentDateTime time.Time = time.Now()
 
 	workChannel := make(chan bool)
 	timeout := time.After(FUNCTIONDURATION * time.Minute)
@@ -120,7 +111,7 @@ func ExecuteMonthly(cfg *Config) {
 		endIdx := min(startIdx+ROUTINELIMIT, numApps)
 
 		for j := startIdx; j < endIdx; j++ {
-			go processAppMonthly(cfg, appList[j], monthToAvg, yearToAvg, workChannel)
+			go processAppMonthly(cfg, appList[j], &currentDateTime, workChannel)
 		}
 
 		// Wait on communication received from each go routine
@@ -227,8 +218,7 @@ func ExecuteRecovery(cfg *Config) {
 func processAppMonthly(
 	cfg *Config,
 	app AppShadow,
-	monthToAvg time.Month,
-	yearToAvg int,
+	currentDateTime *time.Time,
 	ch chan<- bool) {
 	cfg.Trace.Debug.Printf("monthly process on app: %s - ID: %+v.", app.Ref.Name, app.Ref.ID)
 
@@ -241,16 +231,16 @@ func processAppMonthly(
 		return
 	}
 
-	newDailyMetricList, newPeak, newAverage := monthlySanitise(appBom, monthToAvg, yearToAvg)
+	newDailyMetricList, newPeak, newAverage := monthlySanitise(appBom, currentDateTime)
 	appBom.DailyMetrics = *newDailyMetricList
 	cfg.Trace.Debug.Printf("Computed monthly average %d, for app %s", newAverage, app.Ref.Name)
 
 	sortDates(&appBom.Metrics)
 	previousMonthMetrics := appBom.Metrics[len(appBom.Metrics)-1]
 
-	cfg.Trace.Info.Printf("Construct month element: month - %s, year - %d", monthToAvg.String(), yearToAvg)
+	cfg.Trace.Info.Printf("Construct month element: month - %s, year - %d", currentDateTime.Month().String(), currentDateTime.Year())
 
-	newMonth := constructNewMonthMetric(&previousMonthMetrics, newPeak, newAverage, monthToAvg, yearToAvg)
+	newMonth := constructNewMonthMetric(&previousMonthMetrics, newPeak, newAverage, currentDateTime)
 	appBom.Metrics = append(appBom.Metrics, *newMonth)
 
 	err = cfg.UpdateApp(appBom)
