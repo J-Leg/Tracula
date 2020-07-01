@@ -59,9 +59,9 @@ func monthlySanitise(appBom *App, currentDateTime *time.Time) (*[]DailyMetric, i
 
 	// Criteria for purge:
 	// 1. day difference <= RETENTIONLIMIT
-	for _, dailyMetric := range (*appBom).DailyMetrics {
+	for _, dailyMetric := range appBom.DailyMetrics {
 
-		if dayDiff(currentDateTime, &dailyMetric.Date) >= 90 {
+		if dayDiff(currentDateTime, &dailyMetric.Date) >= RETENTIONLIMIT {
 			continue
 		}
 
@@ -101,9 +101,16 @@ func constructNewMonthMetric(previous *Metric, peak int, avg int, cdt *time.Time
 		gainStr = fmt.Sprintf("%d", gain)
 	}
 
+	var targetMonth time.Month = cdt.Month() - 1
+	var targetYear int = cdt.Year()
+	if cdt.Month() == 0 {
+		targetMonth = time.December
+		targetYear--
+	}
+
 	// Construct new month metric
 	var newMonthMetric = Metric{
-		Date:        time.Date(cdt.Year(), cdt.Month(), 1, 0, 0, 0, 0, time.UTC),
+		Date:        time.Date(targetYear, targetMonth, 1, 0, 0, 0, 0, time.UTC),
 		AvgPlayers:  avg,
 		Gain:        gainStr,
 		GainPercent: gainPcStr,
