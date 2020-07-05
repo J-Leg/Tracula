@@ -11,11 +11,17 @@ import (
 // constants
 const (
 	STEAMDOMAIN = "https://api.steampowered.com"
-	INTERFACE   = "ISteamUserStats"
-	FUNCTION    = "GetNumberOfCurrentPlayers"
-	VERSION     = "v1"
-	IDENTIFIER  = "?appid="
-	BASEURL     = STEAMDOMAIN + "/" + INTERFACE + "/" + FUNCTION + "/" + VERSION + "/" + IDENTIFIER
+	// Population
+	POPULATIONINTERFACE = "ISteamUserStats"
+	POPULATIONFUNCTION  = "GetNumberOfCurrentPlayers"
+	POPULATIONVERSION   = "v1"
+	IDENTIFIER          = "?appid="
+	POPULATIONBASE      = STEAMDOMAIN + "/" + POPULATIONINTERFACE + "/" + POPULATIONFUNCTION + "/" + POPULATIONVERSION + "/" + IDENTIFIER
+	// Apps
+	APPINTERFACE = "ISteamApps"
+	APPFUNCTION  = "GetAppList"
+	APPVERSION   = "v2"
+	APPBASE      = STEAMDOMAIN + "/" + APPINTERFACE + "/" + APPFUNCTION + "/" + APPVERSION
 )
 
 var myClient = &http.Client{Timeout: 10 * time.Second}
@@ -32,8 +38,7 @@ type DataContainer struct {
 }
 
 func fetchSteam(id int) (int, error) {
-	url := BASEURL + strconv.Itoa(id)
-	// log.Println(fmt.Sprintf("[STEAM] Fetching current player count on %s", url))
+	url := POPULATIONBASE + strconv.Itoa(id)
 
 	res := 0
 	r, err := myClient.Get(url)
@@ -42,18 +47,57 @@ func fetchSteam(id int) (int, error) {
 	}
 	defer r.Body.Close()
 
-	resultByteArr, err := ioutil.ReadAll(r.Body)
+	serialResult, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		return res, err
 	}
 
 	var rc ResponseContainer
-	err = json.Unmarshal(resultByteArr, &rc)
+	err = json.Unmarshal(serialResult, &rc)
 	if err != nil {
 		return res, err
 	}
 
 	res = rc.Data.Count
-	// log.Println(fmt.Sprintf("Current total player count for url: %d", res))
 	return res, nil
+}
+
+type AppResponseContainer struct {
+	AppList AppListDataContainer `json:"applist"`
+}
+
+type AppListDataContainer struct {
+	Apps []AppDataContainer `json:"apps"`
+}
+
+type AppDataContainer struct {
+	ID   int    `json:"appid"`
+	Name string `json:"name"`
+}
+
+func fetchSteamApps() (map[int]string, error) {
+	var appMap map[int]string = make(map[int]string)
+	url := APPBASE
+
+	r, err := myClient.Get(url)
+	if err != nil {
+		return appMap, err
+	}
+
+	serialResult, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		return appMap, err
+	}
+
+	var responseContainer AppResponseContainer
+	err = json.Unmarshal(serialResult, &responseContainer)
+	if err != nil {
+		return appMap, err
+	}
+
+	// Convert response to map
+	for _, element := range responseContainer.AppList.Apps {
+		appMap[element.ID] = element.Name
+	}
+	return appMap, nil
 }
