@@ -109,7 +109,7 @@ func (cfg Config) GetAppList() ([]AppShadow, error) {
 
 	dateTime, err := time.Parse(DATEPATTERN, time.Now().UTC().String()[:19])
 	if err != nil {
-		cfg.Trace.Error.Printf("unable to construct datetime.\n")
+		cfg.Trace.Error.Printf("unable to construct datetime.")
 		return nil, err
 	}
 
@@ -135,7 +135,7 @@ func (cfg Config) GetAppList() ([]AppShadow, error) {
 
 // PushDaily : Insert daily metric
 func (cfg Config) PushDaily(id primitive.ObjectID, element *DailyMetric) error {
-	cfg.Trace.Debug.Printf("[PlayerCount Collection] inserting new daily for app %s\n", id.String())
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] inserting new daily for app %s", id.String())
 
 	match := bson.M{"_id": id}
 	action := bson.M{"$push": bson.M{"daily_metrics": element}}
@@ -143,13 +143,24 @@ func (cfg Config) PushDaily(id primitive.ObjectID, element *DailyMetric) error {
 	if err != nil {
 		return err
 	}
-	cfg.Trace.Debug.Printf("[PlayerCount Collection] insertion success.\n")
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] insertion success.")
+	return nil
+}
+
+func (cfg Config) PushApp(element *App) error {
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] inserting new app: %s", element.Name)
+
+	_, err := cfg.Col.Stats.InsertOne(cfg.Ctx, element)
+	if err != nil {
+		return err
+	}
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] insertion success.")
 	return nil
 }
 
 // PushMonthly : Insert new month instance
 func (cfg Config) PushMonthly(id primitive.ObjectID, element *Metric) error {
-	cfg.Trace.Debug.Printf("[PlayerCount Collection] inserting new monthly for app %s.\n", id.String())
+	cfg.Trace.Debug.Printf("[PlayerCount Collection] inserting new monthly for app %s.", id.String())
 
 	match := bson.M{"_id": id}
 	action := bson.M{"$push": bson.M{"metrics": element}}

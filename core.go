@@ -13,10 +13,10 @@ const (
 	MONTHS           = 12
 	FUNCTIONDURATION = 8
 
-	DAILY    = 0
-	MONTHLY  = 1
-	RECOVERY = 2
-
+	DAILY        = 0
+	MONTHLY      = 1
+	RECOVERY     = 2
+	REFRESH      = 3
 	ROUTINELIMIT = 50 // Max number of go-routines running concurrently
 )
 
@@ -139,7 +139,7 @@ func ExecuteMonthly(cfg *Config) {
 func finalise(t int, numSuccess, numError *int, ch chan<- bool, bar *pb.ProgressBar, cfg *Config) {
 	close(ch)
 
-	if cfg.LocalEnabled {
+	if bar != nil {
 		bar.Finish()
 	}
 
@@ -150,11 +150,91 @@ func finalise(t int, numSuccess, numError *int, ch chan<- bool, bar *pb.Progress
 		jobType = "monthly"
 	} else if t == RECOVERY {
 		jobType = "recovery"
+	} else if t == REFRESH {
+		jobType = "refresh"
 	} else {
 		cfg.Trace.Error.Printf("Invalid job type %d", t)
 	}
 
 	cfg.Trace.Info.Printf("%s execution REPORT:\n    success: %d\n    errors: %d", jobType, *numSuccess, *numError)
+}
+
+// ExecuteRefresh updates the app library
+func ExecuteRefresh(cfg *Config) {
+	appList, err := cfg.GetAppList()
+	if err != nil {
+		cfg.Trace.Error.Printf("error retrieve app list %s", err)
+	}
+	// Convert list to map
+	var currentAppMap map[int]bool = make(map[int]bool)
+	for _, appElement := range appList {
+		currentAppMap[appElement.Ref.DomainID] = true
+	}
+
+	newDomainAppMap, err := stats.FetchApps()
+	if err != nil {
+		cfg.Trace.Error.Printf("error fetching latest apps %s", err)
+	}
+
+	// Identify and construct new apps
+	var newApps []App
+	for domain, appMap := range newDomainAppMap {
+		for appId, appName := range appMap {
+
+			// Check if exists already in library
+			_, ok := currentAppMap[appId]
+			if ok {
+				continue
+			}
+
+			cfg.Trace.Info.Printf("New app: %s - id: %d", appName, appId)
+
+			newApp := App{
+				AppID:        appId,
+				Name:         appName,
+				Metrics:      make([]Metric, 0), // Initialise 0 len slice instead of nil slice
+				DailyMetrics: make([]DailyMetric, 0),
+				Domain:       domain,
+			}
+			newApps = append(newApps, newApp)
+		}
+	}
+
+	workChannel := make(chan bool)
+	timeout := time.After(FUNCTIONDURATION * time.Minute)
+
+	var numUpdates int = len(newApps)
+	var numBatches int = int(math.Ceil(float64(numUpdates / ROUTINELIMIT)))
+	var numSuccess, numErrors int = 0, 0
+
+	var bar *pb.ProgressBar
+	defer finalise(REFRESH, &numSuccess, &numErrors, workChannel, bar, cfg)
+
+	for i := 0; i <= numBatches; i++ {
+		startIdx := i * ROUTINELIMIT
+		endIdx := min(startIdx+ROUTINELIMIT, numUpdates)
+
+		for j := startIdx; j < endIdx; j++ {
+			go processRefresh(cfg, &(newApps[j]), workChannel)
+		}
+
+		// Wait on communication received from each go routine (in the batch)
+		for j := startIdx; j < endIdx; j++ {
+			select {
+			case msg := <-workChannel:
+				if msg {
+					numSuccess++
+				} else {
+					numErrors++
+				}
+
+			case <-timeout:
+				cfg.Trace.Info.Printf("Refresh process runtime exceeding maximum duration.")
+				return
+			}
+		}
+	}
+	return
 }
 
 // ExecuteRecovery : Best effort to retry all exception instances
@@ -278,6 +358,20 @@ func processApp(cfg *Config, app AppShadow, ch chan<- bool) {
 		return
 	}
 	cfg.Trace.Debug.Printf("daily process success on app: %s - id: %+v.", app.Ref.Name, app.Ref.ID)
+	return
+}
+
+func processRefresh(cfg *Config, app *App, ch chan<- bool) {
+	var err error
+	defer workDone(ch, &err)
+
+	err = cfg.PushApp(app)
+	if err != nil {
+		cfg.Trace.Error.Printf("Error inserting new app: %s", app.Name)
+		return
+	}
+
+	cfg.Trace.Debug.Printf("refresh process success for app: %s - ID: %+v", app.Name, app.AppID)
 	return
 }
 
