@@ -16,25 +16,23 @@ const (
 // Perhaps look into a better way to do this; polymorphism
 func sortDates(m interface{}) {
 	switch t := m.(type) {
-	case *[]Metric:
-		list := *t
-		if sort.SliceIsSorted(list, func(i int, j int) bool {
-			return list[i].Date.Before(list[j].Date)
+	case []Metric:
+		if sort.SliceIsSorted(t, func(i int, j int) bool {
+			return t[i].Date.Before(t[j].Date)
 		}) {
 			return
 		}
-		sort.Slice(list, func(i int, j int) bool {
-			return list[i].Date.Before(list[j].Date)
+		sort.Slice(t, func(i int, j int) bool {
+			return t[i].Date.Before(t[j].Date)
 		})
-	case *[]DailyMetric:
-		list := *t
-		if sort.SliceIsSorted(list, func(i int, j int) bool {
-			return list[i].Date.Before(list[j].Date)
+	case []DailyMetric:
+		if sort.SliceIsSorted(t, func(i int, j int) bool {
+			return t[i].Date.Before(t[j].Date)
 		}) {
 			return
 		}
-		sort.Slice(list, func(i int, j int) bool {
-			return list[i].Date.Before(list[j].Date)
+		sort.Slice(t, func(i int, j int) bool {
+			return t[i].Date.Before(t[j].Date)
 		})
 	default:
 		// Do nothing for now...
@@ -42,7 +40,6 @@ func sortDates(m interface{}) {
 }
 
 func monthlySanitise(appBom *App, currentDateTime *time.Time) (*[]DailyMetric, int, int) {
-	// Initialise a new list to be stored
 	var newDailyMetricList []DailyMetric
 
 	var total int = 0
@@ -89,7 +86,6 @@ func dayDiff(a, b *time.Time) int {
 }
 
 func constructNewMonthMetric(previous *Metric, peak int, avg int, cdt *time.Time) *Metric {
-
 	var gainStr string = "-"
 	var gainPcStr string = "-"
 	if previous != nil {
@@ -116,20 +112,5 @@ func constructNewMonthMetric(previous *Metric, peak int, avg int, cdt *time.Time
 		GainPercent: gainPcStr,
 		Peak:        peak,
 	}
-
 	return &newMonthMetric
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
