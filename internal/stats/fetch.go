@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -12,8 +13,11 @@ func Fetch(domain string, id int) (int, error) {
 	var fetchRes int
 	if domain == "steam" {
 		fetchRes, err = fetchSteam(id)
-	} else {
+	} else if domain == "osrs" {
 		fetchRes, err = fetchOsrs()
+	} else {
+		// Unknown domain
+		err = errors.New(fmt.Sprintf("Unknown domain: %s when fetching", domain))
 	}
 	if err != nil {
 		return 0, err

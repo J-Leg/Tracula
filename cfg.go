@@ -18,6 +18,7 @@ type loggers struct {
 type Collections struct {
 	Stats      *mongo.Collection
 	Exceptions *mongo.Collection
+	TrackPool  *mongo.Collection
 }
 
 // Config for execution
