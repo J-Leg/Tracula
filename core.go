@@ -155,6 +155,7 @@ func ExecuteRefresh(cfg *Config) {
 	}
 
 	newDomainAppMap, err := stats.FetchApps()
+	cfg.Trace.Info.Printf("lol %+v", newDomainAppMap)
 	if err != nil {
 		cfg.Trace.Error.Printf("error fetching latest apps %s", err)
 		return
@@ -190,6 +191,12 @@ func ExecuteRefresh(cfg *Config) {
 	var numSuccess, numErrors int = 0, 0
 
 	var bar *pb.ProgressBar
+	if cfg.LocalEnabled {
+		bar = pb.StartNew(numUpdates)
+		bar.SetRefreshRate(time.Second)
+		bar.SetWriter(os.Stdout)
+		bar.Start()
+	}
 	defer finalise(REFRESH, &numSuccess, &numErrors, workChannel, bar, cfg)
 
 	for i := 0; i <= numBatches; i++ {
@@ -213,6 +220,9 @@ func ExecuteRefresh(cfg *Config) {
 			case <-timeout:
 				cfg.Trace.Info.Printf("Refresh process runtime exceeding maximum duration.")
 				return
+			}
+			if cfg.LocalEnabled {
+				bar.Increment()
 			}
 		}
 	}
@@ -380,16 +390,17 @@ func processAppMonthly(
 	var err error
 	defer workDone(ch, &err)
 
-	newDailyMetricList, newPeak, newAverage := monthlySanitise(app, currentDateTime)
-	app.DailyMetrics = *newDailyMetricList
+	newPeak, newAverage := monthlySanitise(app, currentDateTime)
 	cfg.Trace.Debug.Printf("Computed monthly average %d, for app %s", newAverage, app.StaticData.Name)
 
 	sortDates(app.Metrics)
-	previousMonthMetrics := app.Metrics[len(app.Metrics)-1]
-
+	var previousMonthMetricsPtr *Metric = nil
+	if len(app.Metrics) > 0 {
+		previousMonthMetricsPtr = &app.Metrics[len(app.Metrics)-1]
+	}
 	cfg.Trace.Info.Printf("Construct month element: month - %s, year - %d", currentDateTime.Month().String(), currentDateTime.Year())
 
-	newMonth := constructNewMonthMetric(&previousMonthMetrics, newPeak, newAverage, currentDateTime)
+	newMonth := constructNewMonthMetric(previousMonthMetricsPtr, newPeak, newAverage, currentDateTime)
 	app.Metrics = append(app.Metrics, *newMonth)
 
 	err = cfg.UpdateApp(app)

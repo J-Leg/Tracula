@@ -39,7 +39,7 @@ func sortDates(m interface{}) {
 	}
 }
 
-func monthlySanitise(appBom *App, currentDateTime *time.Time) (*[]DailyMetric, int, int) {
+func monthlySanitise(appBom *App, currentDateTime *time.Time) (int, int) {
 	var newDailyMetricList []DailyMetric
 
 	var total int = 0
@@ -71,12 +71,13 @@ func monthlySanitise(appBom *App, currentDateTime *time.Time) (*[]DailyMetric, i
 	}
 
 	sortDates(newDailyMetricList)
+	appBom.DailyMetrics = newDailyMetricList
 
 	var newAverage int = 0
 	if numCounted > 0 {
 		newAverage = total / numCounted
 	}
-	return &newDailyMetricList, newPeak, newAverage
+	return newPeak, newAverage
 }
 
 // dayDiff calculates the number of days from : a - b
