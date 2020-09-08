@@ -1,4 +1,4 @@
-package tracula
+package core 
 
 import (
 	"cloud.google.com/go/logging"
@@ -30,7 +30,7 @@ type Config struct {
 	LocalEnabled bool
 }
 
-// InitConfig - initialise config struct and return pointer to it
+// InitConfig - initialise config struct
 func InitConfig(ctx context.Context, cols *Collections) *Config {
 	newLoggers, loggerClient := initCloudLoggers(ctx)
 	newConfig := Config{

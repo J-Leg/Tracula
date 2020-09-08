@@ -1,7 +1,6 @@
 module github.com/J-Leg/tracula
 
 go 1.13
-
 require (
 	cloud.google.com/go v0.57.0 // indirect
 	cloud.google.com/go/logging v1.0.0

@@ -44,6 +44,7 @@ github.com/BurntSushi/xgb v0.0.0-20160522181843-27f122750802/go.mod h1:IVnqGOEym
 github.com/GoogleCloudPlatform/functions-framework-go v1.0.1 h1:4/EoN/+ZOmPv0z+FfnsPcopM8OgBh0F9id/L8PGL4PE=
 github.com/GoogleCloudPlatform/functions-framework-go v1.0.1/go.mod h1:M7Q0iVaQAKX2fWjnBzozOuiTqy0jVM/j5hZhsyyQlIM=
 github.com/J-leg/player-count v1.0.2 h1:PtUOUYAzd3zJc8amAfXOYJPijiI7S34z6+wh3i9stMo=
+github.com/J-leg/tracula v1.0.5 h1:ETW78Tytvqp5giDicGOrgscicq2RWGopuCIb6Qf1yIg=
 github.com/PuerkitoBio/goquery v1.5.1 h1:PSPBGne8NIUWw+/7vFBV+kG2J/5MOjbzc7154OaKCSE=
 github.com/PuerkitoBio/goquery v1.5.1/go.mod h1:GsLWisAFVj4WgDibEWF4pvYnkVQBpKBKeU+7zCJoLcc=
 github.com/Shopify/sarama v1.19.0/go.mod h1:FVkBWblsNy7DGZRfXLU0O9RCGt5g3g3yEuWXgklEdEo=

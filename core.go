@@ -1,11 +1,12 @@
-package tracula
+package tracula 
 
 import (
-	"github.com/J-Leg/tracula/internal/stats"
+  "context"
+  "time"
 	"github.com/cheggaaa/pb/v3"
-	"math"
-	"os"
-	"time"
+  "github.com/J-leg/tracula/internal/db"
+  "math"
+  "os"
 )
 
 // Constants
@@ -17,133 +18,50 @@ const (
 	MONTHLY  = 1
 	RECOVERY = 2
 	REFRESH  = 3
-	TRACKER  = 4
+	TRACK  = 4
 
 	ROUTINELIMIT        = 50 // Max number of go-routines running concurrently
 	REFRESHROUTINELIMIT = 50
+	DATEPATTERN = "2006-01-02 15:04:05"
 
 	NOACTIVITYLIMIT = 3
+
+  CAPACITY = 200000
+  LIMIT = 50 
 )
 
-// Execute : Core execution for daily updates
-// Update all apps
-func Execute(cfg *Config) {
-	cfg.Trace.Debug.Printf("initiate daily execution.")
-
-	appList, err := cfg.getAppListTracked()
-	if err != nil {
-		cfg.Trace.Error.Printf("failed to retrieve app list. %s", err)
-		return
-	}
-
-	workChannel := make(chan bool)
-	timeout := time.After(FUNCTIONDURATION * time.Minute)
-
-	var numSuccess, numErrors int = 0, 0
-	var numApps int = len(appList)
-	var numBatches int = int(math.Ceil(float64(numApps / ROUTINELIMIT)))
-
-	var bar *pb.ProgressBar
-	if cfg.LocalEnabled {
-		bar = pb.StartNew(numApps)
-		bar.SetRefreshRate(time.Second)
-		bar.SetWriter(os.Stdout)
-		bar.Start()
-	}
-
-	defer finalise(DAILY, &numSuccess, &numErrors, workChannel, bar, cfg)
-
-	for i := 0; i <= numBatches; i++ {
-		startIdx := i * ROUTINELIMIT
-		endIdx := min(startIdx+ROUTINELIMIT, numApps)
-
-		for j := startIdx; j < endIdx; j++ {
-			go processApp(cfg, &appList[j], workChannel)
-		}
-
-		// Wait on communication received from each go routine
-		// For each item in the batch
-		for j := startIdx; j < endIdx; j++ {
-			select {
-			case msg := <-workChannel:
-				if msg {
-					numSuccess++
-				} else {
-					numErrors++
-				}
-			case <-timeout:
-				cfg.Trace.Info.Printf("Daily process runtime exceeding maximum duration.")
-				return
-			}
-			if cfg.LocalEnabled {
-				bar.Increment()
-			}
-		}
-	}
-	return
+type msgAtomic struct {
+  ID string
+  err error
+  ctx context.Context
 }
 
-// ExecuteMonthly : Monthly process
-func ExecuteMonthly(cfg *Config) {
-	cfg.Trace.Debug.Printf("initiate monthly execution.")
-	appList, err := cfg.getAppListFull()
-	if err != nil {
-		cfg.Trace.Error.Printf("failed to retrieve app list. %s", err)
-		return
-	}
-
-	var currentDateTime time.Time = time.Now()
-
-	workChannel := make(chan bool)
-	timeout := time.After(FUNCTIONDURATION * time.Minute)
-
-	var numApps int = len(appList)
-	var numBatches int = int(math.Ceil(float64(numApps / ROUTINELIMIT)))
-	var numSuccess, numErrors int = 0, 0
-
-	var bar *pb.ProgressBar
-	if cfg.LocalEnabled {
-		bar = pb.StartNew(numApps)
-		bar.SetRefreshRate(time.Second)
-		bar.SetWriter(os.Stdout)
-		bar.Start()
-	}
-
-	defer finalise(MONTHLY, &numSuccess, &numErrors, workChannel, bar, cfg)
-
-	for i := 0; i <= numBatches; i++ {
-		startIdx := i * ROUTINELIMIT
-		endIdx := min(startIdx+ROUTINELIMIT, numApps)
-
-		for j := startIdx; j < endIdx; j++ {
-			go processAppMonthly(cfg, &appList[j], &currentDateTime, workChannel)
-		}
-
-		// Wait on communication received from each go routine
-		// For each item in the batch
-		for j := startIdx; j < endIdx; j++ {
-			select {
-			case msg := <-workChannel:
-				if msg {
-					numSuccess++
-				} else {
-					numErrors++
-				}
-			case <-timeout:
-				cfg.Trace.Info.Printf("Monthly process runtime exceeding maximum duration.")
-				return
-			}
-			if cfg.LocalEnabled {
-				bar.Increment()
-			}
-		}
-	}
-	return
+// Exported entry points
+// Daily
+func Daily(cfg *Config) {
+  execute(cfg, DAILY, dailyAtomic)
 }
 
-// ExecuteRefresh updates the app library
-func ExecuteRefresh(cfg *Config) {
-	appList, err := cfg.getAppListMonthData()
+// Monthly
+func Monthly(cfg *Config) {
+  execute(cfg, MONTHLY, monthlyAtomic)
+}
+
+// Track
+func Track(cfg *Config) {
+  execute(cfg, TRACK, trackAtomic)
+}
+
+// Recover
+func Recover(cfg *Config) {
+  // TODO
+  db.flush(cfg.Col.Exceptions)
+  execute(cfg, RECOVERY, dailyAtomic)
+}
+
+// Refresh - TODO
+func Refresh(cfg *Config) {
+	appList, err := db.getFullStaticData(cfg.Col.Stats)
 	if err != nil {
 		cfg.Trace.Error.Printf("error retrieving app list %s", err)
 		return
@@ -151,17 +69,16 @@ func ExecuteRefresh(cfg *Config) {
 	// Convert list to map
 	var currentAppMap map[int]bool = make(map[int]bool)
 	for _, appElement := range appList {
-		currentAppMap[appElement.StaticData.AppID] = true
+		currentAppMap[appElement.AppID] = true
 	}
 
-	newDomainAppMap, err := stats.FetchApps()
-	cfg.Trace.Info.Printf("lol %+v", newDomainAppMap)
+	newDomainAppMap, err := FetchApps()
 	if err != nil {
 		cfg.Trace.Error.Printf("error fetching latest apps %s", err)
 		return
 	}
 	// Identify and construct new apps
-	var newApps []App
+	var newApps []db.App
 	for domain, appMap := range newDomainAppMap {
 		for appId, appName := range appMap {
 
@@ -173,187 +90,155 @@ func ExecuteRefresh(cfg *Config) {
 
 			cfg.Trace.Info.Printf("New app: %s - id: %d", appName, appId)
 
-			newStaticData := StaticAppData{Name: appName, AppID: appId, Domain: domain}
-			newApp := App{
-				Metrics:      make([]Metric, 0), // Initialise 0 len slice instead of nil slice
-				DailyMetrics: make([]DailyMetric, 0),
+			newStaticData := db.StaticAppData{Name: appName, AppID: appId, Domain: domain}
+			newApp := db.App{
+				Metrics:      make([]db.Metric, 0), // Initialise 0 len slice instead of nil slice
+				DailyMetrics: make([]db.DailyMetric, 0),
 				StaticData:   newStaticData,
 			}
 			newApps = append(newApps, newApp)
 		}
 	}
+  // TODO
+  execute(cfg, REFRESH, refreshAtomic)
+}
 
-	workChannel := make(chan bool)
-	timeout := time.After(FUNCTIONDURATION * time.Minute)
+type executeAtomic func(ctx context.Context, app *db.App, cols *Collections, ch chan<-msgAtomic)  
 
-	var numUpdates int = len(newApps)
-	var numBatches int = int(math.Ceil(float64(numUpdates / ROUTINELIMIT)))
-	var numSuccess, numErrors int = 0, 0
+func execute(cfg *Config, jobType int, atomic executeAtomic) {
 
-	var bar *pb.ProgressBar
-	if cfg.LocalEnabled {
-		bar = pb.StartNew(numUpdates)
+  numDocuments, cursor, err := db.getJobParams(jobType, cfg.Col.Stats)
+  if err != nil {
+    cfg.Trace.Error.Printf("Error initialising job params: %s", err)
+    return
+  }
+
+  numBatches := int(math.Ceil(float64(numDocuments/LIMIT)))
+  numSuccess, numErrors := 0, 0
+
+  // Local - only
+  var bar *pb.ProgressBar
+  if cfg.LocalEnabled {
+		bar = pb.StartNew(numDocuments)
 		bar.SetRefreshRate(time.Second)
 		bar.SetWriter(os.Stdout)
 		bar.Start()
-	}
-	defer finalise(REFRESH, &numSuccess, &numErrors, workChannel, bar, cfg)
+  }
 
-	for i := 0; i <= numBatches; i++ {
-		startIdx := i * ROUTINELIMIT
-		endIdx := min(startIdx+ROUTINELIMIT, numUpdates)
-
-		for j := startIdx; j < endIdx; j++ {
-			go processRefresh(cfg, &(newApps[j]), workChannel)
-		}
-
-		// Wait on communication received from each go routine (in the batch)
-		for j := startIdx; j < endIdx; j++ {
-			select {
-			case msg := <-workChannel:
-				if msg {
-					numSuccess++
-				} else {
-					numErrors++
-				}
-
-			case <-timeout:
-				cfg.Trace.Info.Printf("Refresh process runtime exceeding maximum duration.")
-				return
-			}
-			if cfg.LocalEnabled {
-				bar.Increment()
-			}
-		}
-	}
-	return
-}
-
-// ExecuteRecovery : Best effort to retry all exception instances
-func ExecuteRecovery(cfg *Config) {
-	var appsToUpdate, err = cfg.GetExceptions()
-	if err != nil {
-		cfg.Trace.Error.Printf("Error retrieving exceptions. %s", err)
-		return
-	}
-
-	cfg.FlushExceptions()
-
-	workChannel := make(chan bool)
+	workChannel := make(chan msgAtomic)
 	timeout := time.After(FUNCTIONDURATION * time.Minute)
 
-	var numExceptions = len(appsToUpdate)
-	var numBatches int = int(math.Ceil(float64(numExceptions / ROUTINELIMIT)))
-	var numSuccess, numErrors int = 0, 0
+  for i := 0; i <= numBatches; i++ {
+    curr := 0
+    numRoutines := 0
+    for curr < LIMIT && cursor.Next(context.TODO()) {
+      var app db.App
+      curr++
+      if err := cursor.Decode(&app); err != nil {
+        cfg.Trace.Error.Printf("Error decoding. %s", err)
+        continue
+      }
 
-	var bar *pb.ProgressBar
-	if cfg.LocalEnabled {
-		bar = pb.StartNew(numExceptions)
-		bar.SetRefreshRate(time.Second)
-		bar.SetWriter(os.Stdout)
-		bar.Start()
+      go atomic(cfg.Ctx, &app, cfg.Col, workChannel)
+      numRoutines++
+    }
+
+    for completed := 0; completed < numRoutines; completed++ {
+      select {
+      case msg := <- workChannel:
+        if msg.err == nil {
+          cfg.Trace.Debug.Printf("Successful process [%d] for app %s.", jobType, msg.ID)
+          numSuccess++
+        } else {
+          cfg.Trace.Error.Printf("Error process [%d] app %s - %s", jobType, msg.ID, msg.err.Error()) 
+          numErrors++
+        }
+      case <- timeout:
+        cfg.Trace.Info.Println("Process timeout signal received. Terminate.")
+        close(workChannel)
+        cursor.Close(cfg.Ctx)
+        return
+      }
+      if cfg.LocalEnabled { bar.Increment() }
+    }
+  }
+
+  close(workChannel)
+  cursor.Close(cfg.Ctx)
+	if bar != nil { bar.Finish() }
+
+	var job string
+  switch jobType {
+  case DAILY:
+    job = "daily"
+  case MONTHLY:
+    job = "monthly"
+  case RECOVERY:
+    job = "recovery"
+  case REFRESH:
+    job = "refresh"
+  case TRACK:
+    job = "track"
+  default:
+		cfg.Trace.Error.Printf("Invalid job type %d", jobType)
 	}
-
-	defer finalise(RECOVERY, &numSuccess, &numErrors, workChannel, bar, cfg)
-
-	for i := 0; i <= numBatches; i++ {
-		startIdx := i * ROUTINELIMIT
-		endIdx := min(startIdx+ROUTINELIMIT, numExceptions)
-
-		for j := startIdx; j <= endIdx; j++ {
-			go processApp(cfg, &appsToUpdate[j], workChannel)
-		}
-
-		for j := startIdx; j < endIdx; j++ {
-			select {
-			case msg := <-workChannel:
-				if msg {
-					numSuccess++
-				} else {
-					numErrors++
-				}
-			case <-timeout:
-				cfg.Trace.Info.Printf("Daily process runtime exceeding maximum duration.")
-				return
-			}
-
-			if cfg.LocalEnabled {
-				bar.Increment()
-			}
-		}
-	}
-	close(workChannel)
-	cfg.Trace.Info.Printf("[Exceptions] recovery process complete.")
-	return
+	cfg.Trace.Info.Printf("%s execution REPORT:\n    success: %d\n    errors: %d", job, numSuccess, numErrors)
 }
 
-// ExecuteTracker runs a job to aggregate any apps that are worth tracking
-func ExecuteTracker(cfg *Config) {
-	err := cfg.flushTrackPool()
-	if err != nil {
-		cfg.Trace.Error.Printf("[Tracker] error flushing pool. %s", err)
-		return
-	}
+func dailyAtomic(ctx context.Context, app *db.App, cols *Collections, ch chan<-msgAtomic) {
+  var err error
+  defer finaliseAtomic(ctx, ch, app.ID.String(), &err)
 
-	appList, err := cfg.getAppListMonthData()
-	if err != nil {
-		cfg.Trace.Error.Printf("error retrieving app list: %s", err)
-		return
-	}
+  var currDateTime time.Time
+  currDateTime, err = time.Parse(DATEPATTERN, time.Now().UTC().String()[:19])
+  if err != nil { return }
 
-	workChannel := make(chan bool)
-	timeout := time.After(FUNCTIONDURATION * time.Minute)
+  var quantity int
+  quantity, err = stats.Fetch(app.StaticData.Domain, app.StaticData.AppID)
+  if err != nil { return }
 
-	var numApps int = len(appList)
-	var numBatches int = int(math.Ceil(float64(numApps / REFRESHROUTINELIMIT)))
-	var numSuccess, numErrors int = 0, 0
-
-	var bar *pb.ProgressBar
-	if cfg.LocalEnabled {
-		bar = pb.StartNew(numApps)
-		bar.SetRefreshRate(time.Second)
-		bar.SetWriter(os.Stdout)
-		bar.Start()
-	}
-
-	defer finalise(TRACKER, &numSuccess, &numErrors, workChannel, bar, cfg)
-
-	for i := 0; i <= numBatches; i++ {
-		startIdx := i * ROUTINELIMIT
-		endIdx := min(startIdx+ROUTINELIMIT, numApps)
-
-		for j := startIdx; j < endIdx; j++ {
-			go processAppTrack(cfg, &appList[j], workChannel)
-		}
-
-		// Wait on communication received from each go routine
-		// For each item in the batch
-		for j := startIdx; j < endIdx; j++ {
-			select {
-			case msg := <-workChannel:
-				if msg {
-					numSuccess++
-				} else {
-					numErrors++
-				}
-			case <-timeout:
-				cfg.Trace.Info.Printf("Tracker process runtime exceeding maximum duration.")
-				return
-			}
-			if cfg.LocalEnabled {
-				bar.Increment()
-			}
-		}
-	}
+  newDailyElement := DailyMetric{Date: currDateTime, PlayerCount: quantity}
+  app.DailyMetrics = append(app.DailyMetrics, newDailyElement)
+  app.LastMetric = newDailyElement
+  
+  err = updateApp(ctx, app, cols.Stats)
 }
 
-func processAppTrack(cfg *Config, appBom *App, ch chan<- bool) {
-	var err error
-	defer workDone(ch, &err)
+func monthlyAtomic(ctx context.Context, app *App, cols *Collections, ch chan<-msgAtomic) {
+  var err error
+  defer finaliseAtomic(ctx, ch, app.ID.String(), &err)
 
-	// Add to the tracker pool if satisfies the below condition
-	// A non-zero player count over the last 3 months (or up to 3 months)
-	var monthMetricList []Metric = appBom.Metrics
+  var currDateTime time.Time
+  currDateTime, err = time.Parse(DATEPATTERN, time.Now().UTC().String()[:19])
+  if err != nil { return }
+  
+  newPeak, newAverage := analyseMonthData(app, &currDateTime)
+  
+  var prevMonthMetricPtr *Metric = nil
+  if len(app.Metrics) > 0 {
+    prevMonthMetricPtr = &(app.Metrics[len(app.Metrics)-1])
+  }
+
+  newMonthMetricPtr := constructNewMonthMetric(prevMonthMetricPtr, newPeak, newAverage, &currDateTime)
+  app.Metrics = append(app.Metrics, *newMonthMetricPtr)
+
+  err = updateApp(ctx, app, cols.Stats)
+}
+
+func refreshAtomic(ctx context.Context, app *App, cols *Collections, ch chan<-msgAtomic) {
+  var err error
+  defer finaliseAtomic(ctx, ch, app.ID.String(), &err)
+
+  err = addNewApp(ctx, app, cols.Stats)
+}
+
+func trackAtomic(ctx context.Context, app *App, cols *Collections, ch chan<-msgAtomic) {
+  var err error
+  defer finaliseAtomic(ctx, ch, app.ID.String(), &err)
+
+	// Set track flag
+  // A non-zero playercount over the last 3 months (or up to 3 months)
+	var monthMetricList []Metric = app.Metrics
 	var isWorthTracking bool = false
 	for i := len(monthMetricList) - 1; i >= max(0, len(monthMetricList)-1-NOACTIVITYLIMIT); i-- {
 		if monthMetricList[i].AvgPlayers > 0 {
@@ -363,109 +248,13 @@ func processAppTrack(cfg *Config, appBom *App, ch chan<- bool) {
 	}
 
 	if !isWorthTracking {
-		val, err := stats.Fetch(appBom.StaticData.Domain, appBom.StaticData.AppID)
-		if err != nil {
-			cfg.Trace.Error.Printf("[TRACKER] Error fetching: %s", err)
-		}
-
+    var val int
+		val, err = stats.Fetch(app.StaticData.Domain, app.StaticData.AppID)
+		if err != nil { return }
 		if val == 0 {
+      if app.Tracked { setTrackFlag(app.ID, false, cols.Stats) }
 			return
 		}
 	}
-	err = cfg.pushTrackedApp(appBom)
-	if err != nil {
-		cfg.Trace.Error.Printf("[TRACKER] error pushing new tracked app: %s", err)
-		return
-	}
-	cfg.Trace.Debug.Printf("[TRACKER] Added app: %s to track pool.", appBom.StaticData.Name)
-}
-
-func processAppMonthly(
-	cfg *Config,
-	app *App,
-	currentDateTime *time.Time,
-	ch chan<- bool) {
-	cfg.Trace.Debug.Printf("monthly process on app: %s - ID: %+v.", app.StaticData.Name, app.ID)
-
-	var err error
-	defer workDone(ch, &err)
-
-	newPeak, newAverage := monthlySanitise(app, currentDateTime)
-	cfg.Trace.Debug.Printf("Computed monthly average %d, for app %s", newAverage, app.StaticData.Name)
-
-	sortDates(app.Metrics)
-	var previousMonthMetricsPtr *Metric = nil
-	if len(app.Metrics) > 0 {
-		previousMonthMetricsPtr = &app.Metrics[len(app.Metrics)-1]
-	}
-	cfg.Trace.Info.Printf("Construct month element: month - %s, year - %d", currentDateTime.Month().String(), currentDateTime.Year())
-
-	newMonth := constructNewMonthMetric(previousMonthMetricsPtr, newPeak, newAverage, currentDateTime)
-	app.Metrics = append(app.Metrics, *newMonth)
-
-	err = cfg.UpdateApp(app)
-	if err != nil {
-		cfg.Trace.Error.Printf("Error updating app %s. %s", app.StaticData.Name, err)
-		return
-	}
-
-	cfg.Trace.Debug.Printf("monthly process success for app: %s - ID: %+v.", app.StaticData.Name, app.ID)
-	return
-}
-
-func processApp(cfg *Config, app *AppRef, ch chan<- bool) {
-	appData := app.StaticData
-	cfg.Trace.Debug.Printf("daily process on app: %s - id: %+v.", appData.Name, app.RefID)
-
-	var err error
-	defer workDone(ch, &err)
-
-	currentDateTime, err := time.Parse(DATEPATTERN, time.Now().UTC().String()[:19])
-	if err != nil {
-		cfg.Trace.Error.Printf("unable to construct datetime: %s", err)
-		return
-	}
-
-	population, err := stats.Fetch(appData.Domain, appData.AppID)
-	if err != nil {
-		cfg.Trace.Error.Printf("Error fetch population for app %s! %s", appData.Name, err)
-		err = cfg.PushException(app, &currentDateTime)
-		if err != nil {
-			cfg.Trace.Error.Printf("error inserting app %d to exception queue! %s", app.RefID, err)
-		}
-		return
-	}
-
-	err = cfg.PushDaily(app.RefID, &DailyMetric{Date: currentDateTime, PlayerCount: population})
-	if err != nil {
-		err = cfg.PushException(app, &currentDateTime)
-		if err != nil {
-			cfg.Trace.Error.Printf("error inserting app %d to exception queue! %s", app.RefID, err)
-		}
-		return
-	}
-	cfg.Trace.Debug.Printf("daily process success on app: %s - id: %+v.", app.StaticData.Name, app.RefID)
-	return
-}
-
-func processRefresh(cfg *Config, app *App, ch chan<- bool) {
-	var err error
-	defer workDone(ch, &err)
-
-	err = cfg.PushApp(app)
-	if err != nil {
-		cfg.Trace.Error.Printf("Error inserting new app: %s", app.StaticData.Name)
-		return
-	}
-
-	cfg.Trace.Debug.Printf("refresh process success for app: %s - ID: %+v", app.StaticData.Name, app.StaticData.AppID)
-	return
-}
-
-func workDone(ch chan<- bool, err *error) {
-	if *err == nil {
-		ch <- true
-	} else {
-		ch <- false
-	}
+  if !app.Tracked { setTrackFlag(app.ID, true, cols.Stats) }
 }

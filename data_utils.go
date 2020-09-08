@@ -1,4 +1,4 @@
-package tracula
+package tracula 
 
 import (
 	"fmt"
@@ -39,7 +39,7 @@ func sortDates(m interface{}) {
 	}
 }
 
-func monthlySanitise(appBom *App, currentDateTime *time.Time) (int, int) {
+func analyseMonthData(appBom *App, currentDateTime *time.Time) (int, int) {
 	var newDailyMetricList []DailyMetric
 
 	var total int = 0
@@ -50,17 +50,13 @@ func monthlySanitise(appBom *App, currentDateTime *time.Time) (int, int) {
 	// 1. Before today's date
 	// 2. Element month = current month - 1 (normally this process called on the first day of the month)
 	targetMonth := currentDateTime.Month() - 1
-	if targetMonth == 0 {
-		targetMonth = time.December
-	}
+	if targetMonth == 0 { targetMonth = time.December }
 
 	// Criteria for purge:
 	// 1. day difference <= RETENTIONLIMIT
 	for _, dailyMetric := range appBom.DailyMetrics {
 
-		if dayDiff(currentDateTime, &dailyMetric.Date) >= RETENTIONLIMIT {
-			continue
-		}
+		if dayDiff(currentDateTime, &dailyMetric.Date) >= RETENTIONLIMIT { continue }
 
 		if targetMonth == dailyMetric.Date.Month() {
 			newPeak = max(newPeak, dailyMetric.PlayerCount)
@@ -71,12 +67,12 @@ func monthlySanitise(appBom *App, currentDateTime *time.Time) (int, int) {
 	}
 
 	sortDates(newDailyMetricList)
+  sortDates(appBom.Metrics)
 	appBom.DailyMetrics = newDailyMetricList
 
 	var newAverage int = 0
-	if numCounted > 0 {
-		newAverage = total / numCounted
-	}
+	if numCounted > 0 { newAverage = total / numCounted }
+
 	return newPeak, newAverage
 }
 
@@ -115,3 +111,4 @@ func constructNewMonthMetric(previous *Metric, peak int, avg int, cdt *time.Time
 	}
 	return &newMonthMetric
 }
+
