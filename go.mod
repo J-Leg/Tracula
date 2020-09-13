@@ -1,4 +1,4 @@
-module github.com/J-leg/tracula
+module github.com/j-leg/tracula
 
 go 1.13
 
