@@ -1,4 +1,4 @@
-package core 
+package stats 
 
 import (
 	"github.com/PuerkitoBio/goquery"

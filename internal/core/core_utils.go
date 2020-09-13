@@ -1,4 +1,4 @@
-package tracula 
+package core 
 
 import (
   "context"

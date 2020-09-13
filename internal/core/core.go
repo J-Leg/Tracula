@@ -1,10 +1,12 @@
-package tracula 
+package core 
 
 import (
+  "github.com/J-leg/tracula/config"
+  "github.com/J-leg/tracula/internal/db"
+  "github.com/J-leg/tracula/internal/stats"
   "context"
   "time"
-	"github.com/cheggaaa/pb/v3"
-  "github.com/J-leg/tracula/internal/db"
+  "github.com/cheggaaa/pb/v3"
   "math"
   "os"
 )
@@ -38,30 +40,30 @@ type msgAtomic struct {
 
 // Exported entry points
 // Daily
-func Daily(cfg *Config) {
+func Daily(cfg *config.Config) {
   execute(cfg, DAILY, dailyAtomic)
 }
 
 // Monthly
-func Monthly(cfg *Config) {
+func Monthly(cfg *config.Config) {
   execute(cfg, MONTHLY, monthlyAtomic)
 }
 
 // Track
-func Track(cfg *Config) {
+func Track(cfg *config.Config) {
   execute(cfg, TRACK, trackAtomic)
 }
 
 // Recover
-func Recover(cfg *Config) {
+func Recover(cfg *config.Config) {
   // TODO
-  db.flush(cfg.Col.Exceptions)
+  db.Flush(cfg.Col.Exceptions)
   execute(cfg, RECOVERY, dailyAtomic)
 }
 
 // Refresh - TODO
-func Refresh(cfg *Config) {
-	appList, err := db.getFullStaticData(cfg.Col.Stats)
+func Refresh(cfg *config.Config) {
+	appList, err := db.GetFullStaticData(cfg.Col.Stats)
 	if err != nil {
 		cfg.Trace.Error.Printf("error retrieving app list %s", err)
 		return
@@ -72,7 +74,7 @@ func Refresh(cfg *Config) {
 		currentAppMap[appElement.AppID] = true
 	}
 
-	newDomainAppMap, err := FetchApps()
+	newDomainAppMap, err := stats.FetchApps()
 	if err != nil {
 		cfg.Trace.Error.Printf("error fetching latest apps %s", err)
 		return
@@ -103,11 +105,11 @@ func Refresh(cfg *Config) {
   execute(cfg, REFRESH, refreshAtomic)
 }
 
-type executeAtomic func(ctx context.Context, app *db.App, cols *Collections, ch chan<-msgAtomic)  
+type executeAtomic func(ctx context.Context, app *db.App, cols *config.Collections, ch chan<-msgAtomic)  
 
-func execute(cfg *Config, jobType int, atomic executeAtomic) {
+func execute(cfg *config.Config, jobType int, atomic executeAtomic) {
 
-  numDocuments, cursor, err := db.getJobParams(jobType, cfg.Col.Stats)
+  numDocuments, cursor, err := db.GetJobParams(jobType, cfg.Col.Stats)
   if err != nil {
     cfg.Trace.Error.Printf("Error initialising job params: %s", err)
     return
@@ -185,7 +187,7 @@ func execute(cfg *Config, jobType int, atomic executeAtomic) {
 	cfg.Trace.Info.Printf("%s execution REPORT:\n    success: %d\n    errors: %d", job, numSuccess, numErrors)
 }
 
-func dailyAtomic(ctx context.Context, app *db.App, cols *Collections, ch chan<-msgAtomic) {
+func dailyAtomic(ctx context.Context, app *db.App, cols *config.Collections, ch chan<-msgAtomic) {
   var err error
   defer finaliseAtomic(ctx, ch, app.ID.String(), &err)
 
@@ -197,14 +199,14 @@ func dailyAtomic(ctx context.Context, app *db.App, cols *Collections, ch chan<-m
   quantity, err = stats.Fetch(app.StaticData.Domain, app.StaticData.AppID)
   if err != nil { return }
 
-  newDailyElement := DailyMetric{Date: currDateTime, PlayerCount: quantity}
+  newDailyElement := db.DailyMetric{Date: currDateTime, PlayerCount: quantity}
   app.DailyMetrics = append(app.DailyMetrics, newDailyElement)
   app.LastMetric = newDailyElement
   
-  err = updateApp(ctx, app, cols.Stats)
+  err = db.UpdateApp(ctx, app, cols.Stats)
 }
 
-func monthlyAtomic(ctx context.Context, app *App, cols *Collections, ch chan<-msgAtomic) {
+func monthlyAtomic(ctx context.Context, app *db.App, cols *config.Collections, ch chan<-msgAtomic) {
   var err error
   defer finaliseAtomic(ctx, ch, app.ID.String(), &err)
 
@@ -214,7 +216,7 @@ func monthlyAtomic(ctx context.Context, app *App, cols *Collections, ch chan<-ms
   
   newPeak, newAverage := analyseMonthData(app, &currDateTime)
   
-  var prevMonthMetricPtr *Metric = nil
+  var prevMonthMetricPtr *db.Metric = nil
   if len(app.Metrics) > 0 {
     prevMonthMetricPtr = &(app.Metrics[len(app.Metrics)-1])
   }
@@ -222,23 +224,23 @@ func monthlyAtomic(ctx context.Context, app *App, cols *Collections, ch chan<-ms
   newMonthMetricPtr := constructNewMonthMetric(prevMonthMetricPtr, newPeak, newAverage, &currDateTime)
   app.Metrics = append(app.Metrics, *newMonthMetricPtr)
 
-  err = updateApp(ctx, app, cols.Stats)
+  err = db.UpdateApp(ctx, app, cols.Stats)
 }
 
-func refreshAtomic(ctx context.Context, app *App, cols *Collections, ch chan<-msgAtomic) {
+func refreshAtomic(ctx context.Context, app *db.App, cols *config.Collections, ch chan<-msgAtomic) {
   var err error
   defer finaliseAtomic(ctx, ch, app.ID.String(), &err)
 
-  err = addNewApp(ctx, app, cols.Stats)
+  err = db.AddNewApp(ctx, app, cols.Stats)
 }
 
-func trackAtomic(ctx context.Context, app *App, cols *Collections, ch chan<-msgAtomic) {
+func trackAtomic(ctx context.Context, app *db.App, cols *config.Collections, ch chan<-msgAtomic) {
   var err error
   defer finaliseAtomic(ctx, ch, app.ID.String(), &err)
 
 	// Set track flag
   // A non-zero playercount over the last 3 months (or up to 3 months)
-	var monthMetricList []Metric = app.Metrics
+	var monthMetricList []db.Metric = app.Metrics
 	var isWorthTracking bool = false
 	for i := len(monthMetricList) - 1; i >= max(0, len(monthMetricList)-1-NOACTIVITYLIMIT); i-- {
 		if monthMetricList[i].AvgPlayers > 0 {
@@ -252,9 +254,9 @@ func trackAtomic(ctx context.Context, app *App, cols *Collections, ch chan<-msgA
 		val, err = stats.Fetch(app.StaticData.Domain, app.StaticData.AppID)
 		if err != nil { return }
 		if val == 0 {
-      if app.Tracked { setTrackFlag(app.ID, false, cols.Stats) }
+      if app.Tracked { db.SetTrackFlag(app.ID, false, cols.Stats) }
 			return
 		}
 	}
-  if !app.Tracked { setTrackFlag(app.ID, true, cols.Stats) }
+  if !app.Tracked { db.SetTrackFlag(app.ID, true, cols.Stats) }
 }

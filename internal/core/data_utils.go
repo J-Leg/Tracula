@@ -1,9 +1,10 @@
-package tracula 
+package core 
 
 import (
-	"fmt"
-	"sort"
-	"time"
+  "fmt"
+  "sort"
+  "time"
+  "github.com/J-leg/tracula/internal/db"
 )
 
 const (
@@ -16,7 +17,7 @@ const (
 // Perhaps look into a better way to do this; polymorphism
 func sortDates(m interface{}) {
 	switch t := m.(type) {
-	case []Metric:
+	case []db.Metric:
 		if sort.SliceIsSorted(t, func(i int, j int) bool {
 			return t[i].Date.Before(t[j].Date)
 		}) {
@@ -25,7 +26,7 @@ func sortDates(m interface{}) {
 		sort.Slice(t, func(i int, j int) bool {
 			return t[i].Date.Before(t[j].Date)
 		})
-	case []DailyMetric:
+	case []db.DailyMetric:
 		if sort.SliceIsSorted(t, func(i int, j int) bool {
 			return t[i].Date.Before(t[j].Date)
 		}) {
@@ -39,8 +40,8 @@ func sortDates(m interface{}) {
 	}
 }
 
-func analyseMonthData(appBom *App, currentDateTime *time.Time) (int, int) {
-	var newDailyMetricList []DailyMetric
+func analyseMonthData(appBom *db.App, currentDateTime *time.Time) (int, int) {
+	var newDailyMetricList []db.DailyMetric
 
 	var total int = 0
 	var numCounted int = 0
@@ -82,7 +83,7 @@ func dayDiff(a, b *time.Time) int {
 	return int(a.Sub(*b).Hours() / HOURSPERDAY)
 }
 
-func constructNewMonthMetric(previous *Metric, peak int, avg int, cdt *time.Time) *Metric {
+func constructNewMonthMetric(previous *db.Metric, peak int, avg int, cdt *time.Time) *db.Metric {
 	var gainStr string = "-"
 	var gainPcStr string = "-"
 	if previous != nil {
@@ -102,7 +103,7 @@ func constructNewMonthMetric(previous *Metric, peak int, avg int, cdt *time.Time
 	}
 
 	// Construct new month metric
-	var newMonthMetric = Metric{
+	var newMonthMetric = db.Metric{
 		Date:        time.Date(targetYear, targetMonth, 1, 0, 0, 0, 0, time.UTC),
 		AvgPlayers:  avg,
 		Gain:        gainStr,
