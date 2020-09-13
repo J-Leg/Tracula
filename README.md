@@ -1,4 +1,8 @@
-## tracula
+![logo](logo/tracula.png)
+
+
+![Go](https://github.com/J-Leg/tracula/workflows/Go/badge.svg)
+
 A simple package to collect and organise game population data.
 Ideally used for creating batch processes in game tracking apps.
 
