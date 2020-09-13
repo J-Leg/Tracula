@@ -1,28 +1,28 @@
 package stats
 
 import (
-	"errors"
-	"fmt"
-	"strings"
+  "fmt"
+  "strings"
+  "errors"
 )
 
 // Fetch returns a pointer to a DailyMetric struct if retrieval process succeeded,
 // otherwise an error is returned
 func Fetch(domain string, id int) (int, error) {
-	var err error
-	var fetchRes int
-	if domain == "steam" {
-		fetchRes, err = fetchSteam(id)
-	} else if domain == "osrs" {
-		fetchRes, err = fetchOsrs()
-	} else {
-		// Unknown domain
-		err = errors.New(fmt.Sprintf("Unknown domain: %s when fetching", domain))
-	}
-	if err != nil {
-		return 0, err
-	}
-	return fetchRes, nil
+  var err error
+  var res int
+
+  switch domain {
+    case "steam":
+      res, err = fetchSteam(id)
+    case "osrs":
+      res, err = fetchOsrs()
+    default:
+      err = errors.New(fmt.Sprintf("Unknown domain: %s", domain))
+  }
+
+  if err != nil { return -1, err }
+  return res, nil
 }
 
 // FetchApps returns a set of appIds

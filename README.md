@@ -1,11 +1,11 @@
 ## tracula
-A simple package to collect and organise game population data.  
+A simple package to collect and organise game population data.
 Ideally used for creating batch processes in game tracking apps.
 
 ## Installation
 
 ```
-go get github.com/J-leg/tracula
+go get github.com/j-leg/tracula
 ```
 
 ### Usage
