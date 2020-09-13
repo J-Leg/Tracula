@@ -1,9 +1,9 @@
 package core 
 
 import (
-  "github.com/J-leg/tracula/config"
-  "github.com/J-leg/tracula/internal/db"
-  "github.com/J-leg/tracula/internal/stats"
+  "github.com/j-leg/tracula/config"
+  "github.com/j-leg/tracula/internal/db"
+  "github.com/j-leg/tracula/internal/stats"
   "context"
   "time"
   "github.com/cheggaaa/pb/v3"
@@ -13,103 +13,86 @@ import (
 
 // Constants
 const (
-	MONTHS           = 12
-	FUNCTIONDURATION = 8
+  MONTHS           = 12
+  FUNCTIONDURATION = 8
 
-	DAILY    = 0
-	MONTHLY  = 1
-	RECOVERY = 2
-	REFRESH  = 3
-	TRACK  = 4
+  ROUTINELIMIT        = 50 // Max number of go-routines running concurrently
+  REFRESHROUTINELIMIT = 50
+  DATEPATTERN         = "2006-01-02 15:04:05"
 
-	ROUTINELIMIT        = 50 // Max number of go-routines running concurrently
-	REFRESHROUTINELIMIT = 50
-	DATEPATTERN = "2006-01-02 15:04:05"
-
-	NOACTIVITYLIMIT = 3
-
-  CAPACITY = 200000
-  LIMIT = 50 
+  NOACTIVITYLIMIT   = 3
+  LIMIT             = 50 
 )
-
-type msgAtomic struct {
-  ID string
-  err error
-  ctx context.Context
-}
 
 // Exported entry points
 // Daily
 func Daily(cfg *config.Config) {
-  execute(cfg, DAILY, dailyAtomic)
+  execute(cfg, db.DAILY, dailyAtomic)
 }
 
 // Monthly
 func Monthly(cfg *config.Config) {
-  execute(cfg, MONTHLY, monthlyAtomic)
+  execute(cfg, db.MONTHLY, monthlyAtomic)
 }
 
 // Track
 func Track(cfg *config.Config) {
-  execute(cfg, TRACK, trackAtomic)
+  execute(cfg, db.TRACK, trackAtomic)
 }
 
 // Recover
 func Recover(cfg *config.Config) {
   // TODO
-  db.Flush(cfg.Col.Exceptions)
-  execute(cfg, RECOVERY, dailyAtomic)
+  db.Flush(cfg.Ctx, cfg.Col.Exceptions)
+  execute(cfg, db.RECOVERY, dailyAtomic)
 }
 
 // Refresh - TODO
 func Refresh(cfg *config.Config) {
-	appList, err := db.GetFullStaticData(cfg.Col.Stats)
-	if err != nil {
-		cfg.Trace.Error.Printf("error retrieving app list %s", err)
-		return
-	}
-	// Convert list to map
-	var currentAppMap map[int]bool = make(map[int]bool)
-	for _, appElement := range appList {
-		currentAppMap[appElement.AppID] = true
-	}
+  appList, err := db.GetFullStaticData(cfg.Ctx, cfg.Col.Stats)
+  if err != nil {
+    cfg.Trace.Error.Printf("error retrieving app list %s", err)
+    return
+  }
+  // Convert list to map
+  var currentAppMap map[int]bool = make(map[int]bool)
+  for _, appElement := range appList {
+    currentAppMap[appElement.AppID] = true
+  }
 
-	newDomainAppMap, err := stats.FetchApps()
-	if err != nil {
-		cfg.Trace.Error.Printf("error fetching latest apps %s", err)
-		return
-	}
-	// Identify and construct new apps
-	var newApps []db.App
-	for domain, appMap := range newDomainAppMap {
-		for appId, appName := range appMap {
+  newDomainAppMap, err := stats.FetchApps()
+  if err != nil {
+    cfg.Trace.Error.Printf("error fetching latest apps %s", err)
+    return
+  }
+  // Identify and construct new apps
+  var newApps []db.App
+  for domain, appMap := range newDomainAppMap {
+    for appId, appName := range appMap {
 
-			// Check if exists already in library
-			_, ok := currentAppMap[appId]
-			if ok {
-				continue
-			}
+      // Check if exists already in library
+      _, ok := currentAppMap[appId]
+      if ok { continue }
 
-			cfg.Trace.Info.Printf("New app: %s - id: %d", appName, appId)
+      cfg.Trace.Info.Printf("New app: %s - id: %d", appName, appId)
 
-			newStaticData := db.StaticAppData{Name: appName, AppID: appId, Domain: domain}
-			newApp := db.App{
-				Metrics:      make([]db.Metric, 0), // Initialise 0 len slice instead of nil slice
-				DailyMetrics: make([]db.DailyMetric, 0),
-				StaticData:   newStaticData,
-			}
-			newApps = append(newApps, newApp)
-		}
-	}
+      newStaticData := db.StaticAppData{Name: appName, AppID: appId, Domain: domain}
+      newApp := db.App{
+        Metrics:      make([]db.Metric, 0), // Initialise 0 len slice instead of nil slice
+        DailyMetrics: make([]db.DailyMetric, 0),
+        StaticData:   newStaticData,
+      }
+      newApps = append(newApps, newApp)
+    }
+  }
   // TODO
-  execute(cfg, REFRESH, refreshAtomic)
+  execute(cfg, db.REFRESH, refreshAtomic)
 }
 
 type executeAtomic func(ctx context.Context, app *db.App, cols *config.Collections, ch chan<-msgAtomic)  
 
 func execute(cfg *config.Config, jobType int, atomic executeAtomic) {
-
-  numDocuments, cursor, err := db.GetJobParams(jobType, cfg.Col.Stats)
+  numDocuments, cursor, err := db.GetJobParams(cfg, jobType)
   if err != nil {
     cfg.Trace.Error.Printf("Error initialising job params: %s", err)
     return
@@ -121,27 +104,29 @@ func execute(cfg *config.Config, jobType int, atomic executeAtomic) {
   // Local - only
   var bar *pb.ProgressBar
   if cfg.LocalEnabled {
-		bar = pb.StartNew(numDocuments)
-		bar.SetRefreshRate(time.Second)
-		bar.SetWriter(os.Stdout)
-		bar.Start()
+    bar = pb.StartNew(numDocuments)
+    bar.SetRefreshRate(time.Second)
+    bar.SetWriter(os.Stdout)
+    bar.Start()
   }
 
-	workChannel := make(chan msgAtomic)
-	timeout := time.After(FUNCTIONDURATION * time.Minute)
+  workChannel := make(chan msgAtomic)
+  timeout := time.After(FUNCTIONDURATION * time.Minute)
 
   for i := 0; i <= numBatches; i++ {
     curr := 0
     numRoutines := 0
-    for curr < LIMIT && cursor.Next(context.TODO()) {
+    for curr < LIMIT && cursor.Next(cfg.Ctx) {
       var app db.App
       curr++
       if err := cursor.Decode(&app); err != nil {
         cfg.Trace.Error.Printf("Error decoding. %s", err)
         continue
       }
-
-      go atomic(cfg.Ctx, &app, cfg.Col, workChannel)
+      
+      // Deferred cancel handled in atomic go-routine
+      childCtx, _ := context.WithCancel(cfg.Ctx)
+      go atomic(childCtx, &app, cfg.Col, workChannel)
       numRoutines++
     }
 
@@ -167,24 +152,24 @@ func execute(cfg *config.Config, jobType int, atomic executeAtomic) {
 
   close(workChannel)
   cursor.Close(cfg.Ctx)
-	if bar != nil { bar.Finish() }
+  if bar != nil { bar.Finish() }
 
-	var job string
+  var job string
   switch jobType {
-  case DAILY:
-    job = "daily"
-  case MONTHLY:
-    job = "monthly"
-  case RECOVERY:
-    job = "recovery"
-  case REFRESH:
-    job = "refresh"
-  case TRACK:
-    job = "track"
-  default:
-		cfg.Trace.Error.Printf("Invalid job type %d", jobType)
-	}
-	cfg.Trace.Info.Printf("%s execution REPORT:\n    success: %d\n    errors: %d", job, numSuccess, numErrors)
+    case db.DAILY:
+      job = "daily"
+    case db.MONTHLY:
+      job = "monthly"
+    case db.RECOVERY:
+      job = "recovery"
+    case db.REFRESH:
+      job = "refresh"
+    case db.TRACK:
+      job = "track"
+    default:
+      cfg.Trace.Error.Printf("Invalid job type %d", jobType)
+  }
+  cfg.Trace.Info.Printf("%s execution REPORT:\n    success: %d\n    errors: %d", job, numSuccess, numErrors)
 }
 
 func dailyAtomic(ctx context.Context, app *db.App, cols *config.Collections, ch chan<-msgAtomic) {
@@ -238,25 +223,25 @@ func trackAtomic(ctx context.Context, app *db.App, cols *config.Collections, ch 
   var err error
   defer finaliseAtomic(ctx, ch, app.ID.String(), &err)
 
-	// Set track flag
+  // Set track flag
   // A non-zero playercount over the last 3 months (or up to 3 months)
-	var monthMetricList []db.Metric = app.Metrics
-	var isWorthTracking bool = false
-	for i := len(monthMetricList) - 1; i >= max(0, len(monthMetricList)-1-NOACTIVITYLIMIT); i-- {
-		if monthMetricList[i].AvgPlayers > 0 {
-			isWorthTracking = true
-			break
-		}
-	}
+  var monthMetricList []db.Metric = app.Metrics
+  var isWorthTracking bool = false
+  for i := len(monthMetricList) - 1; i >= max(0, len(monthMetricList)-1-NOACTIVITYLIMIT); i-- {
+    if monthMetricList[i].AvgPlayers > 0 {
+      isWorthTracking = true
+      break
+    }
+  }
 
-	if !isWorthTracking {
+  if !isWorthTracking {
     var val int
-		val, err = stats.Fetch(app.StaticData.Domain, app.StaticData.AppID)
-		if err != nil { return }
-		if val == 0 {
-      if app.Tracked { db.SetTrackFlag(app.ID, false, cols.Stats) }
-			return
-		}
-	}
-  if !app.Tracked { db.SetTrackFlag(app.ID, true, cols.Stats) }
+    val, err = stats.Fetch(app.StaticData.Domain, app.StaticData.AppID)
+    if err != nil { return }
+    if val == 0 {
+      if app.Tracked { db.SetTrackFlag(ctx, app.ID, false, cols.Stats) }
+      return
+    }
+  }
+  if !app.Tracked { db.SetTrackFlag(ctx, app.ID, true, cols.Stats) }
 }

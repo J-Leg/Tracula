@@ -1,8 +1,8 @@
 package tracula 
 
 import (
-	"github.com/J-leg/tracula/internal/core"
-  "github.com/J-leg/tracula/config"
+  "github.com/j-leg/tracula/internal/core"
+  "github.com/j-leg/tracula/config"
 )
 
 

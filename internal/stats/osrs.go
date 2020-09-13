@@ -1,11 +1,11 @@
-package stats 
+package stats
 
 import (
-	"github.com/PuerkitoBio/goquery"
-	"net/http"
-	"strconv"
-	"strings"
-	"time"
+  "github.com/PuerkitoBio/goquery"
+  "net/http"
+  "strconv"
+  "strings"
+  "time"
 )
 
 // Steamcharts constants
@@ -19,7 +19,6 @@ func fetchOsrs() (int, error) {
 		Timeout: TIMEOUT * time.Second,
 	}
 
-	// log.Println("Fetch player count for Oldschool Runescape")
 	res := 0
 	resp, err := client.Get(DOMAIN)
 	if err != nil {
@@ -39,8 +38,5 @@ func fetchOsrs() (int, error) {
 	if err != nil {
 		return res, err
 	}
-
-	// log.Printf("Current total player count: %d", res)
-
 	return res, nil
 }
