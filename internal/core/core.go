@@ -15,6 +15,7 @@ import (
 const (
   MONTHS           = 12
   FUNCTIONDURATION = 8
+  LOCALFUNCDURATION = 50
 
   ROUTINELIMIT        = 50 // Max number of go-routines running concurrently
   REFRESHROUTINELIMIT = 50
@@ -103,15 +104,18 @@ func execute(cfg *config.Config, jobType int, atomic executeAtomic) {
 
   // Local - only
   var bar *pb.ProgressBar
+  var timeout <-chan time.Time 
+
   if cfg.LocalEnabled {
     bar = pb.StartNew(numDocuments)
     bar.SetRefreshRate(time.Second)
     bar.SetWriter(os.Stdout)
     bar.Start()
+    timeout = time.After(LOCALFUNCDURATION * time.Minute)
   }
 
   workChannel := make(chan msgAtomic)
-  timeout := time.After(FUNCTIONDURATION * time.Minute)
+  timeout = time.After(FUNCTIONDURATION * time.Minute)
 
   for i := 0; i <= numBatches; i++ {
     curr := 0
