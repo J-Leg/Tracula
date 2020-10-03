@@ -65,6 +65,7 @@ func GetJobParams(cfg *config.Config, jobType int) (int, *mongo.Cursor, error) {
     col = cfg.Col.Exceptions
   case DAILY:
     filter = bson.M{"tracked": true}
+    col = cfg.Col.Stats
   default:
     return 0, nil, errors.New("Invalid job") 
   }
