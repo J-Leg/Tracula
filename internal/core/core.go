@@ -112,10 +112,11 @@ func execute(cfg *config.Config, jobType int, atomic executeAtomic) {
     bar.SetWriter(os.Stdout)
     bar.Start()
     timeout = time.After(LOCALFUNCDURATION * time.Minute)
+  } else {
+    timeout = time.After(FUNCTIONDURATION * time.Minute)
   }
 
   workChannel := make(chan msgAtomic)
-  timeout = time.After(FUNCTIONDURATION * time.Minute)
 
   for i := 0; i <= numBatches; i++ {
     curr := 0
