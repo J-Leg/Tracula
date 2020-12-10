@@ -67,7 +67,7 @@ func Refresh(cfg *config.Config) {
     return
   }
   // Identify and construct new apps
-  var newApps []db.App
+  var newApps []*db.App
   for domain, appMap := range newDomainAppMap {
     for appId, appName := range appMap {
 
@@ -83,11 +83,67 @@ func Refresh(cfg *config.Config) {
         DailyMetrics: make([]db.DailyMetric, 0),
         StaticData:   newStaticData,
       }
-      newApps = append(newApps, newApp)
+      newApps = append(newApps, &newApp)
     }
   }
-  // TODO
-  execute(cfg, db.REFRESH, refreshAtomic)
+  // TODO: Resolve legacy flow
+  numDocuments := len(newApps)
+  numBatches := int(math.Ceil(float64(numDocuments/LIMIT)))
+  numSuccess, numErrors := 0, 0
+
+  // Local - only
+  var bar *pb.ProgressBar
+  var timeout <-chan time.Time 
+
+  if cfg.LocalEnabled {
+    bar = pb.StartNew(numDocuments)
+    bar.SetRefreshRate(time.Second)
+    bar.SetWriter(os.Stdout)
+    bar.Start()
+    timeout = time.After(LOCALFUNCDURATION * time.Minute)
+  } else {
+    timeout = time.After(FUNCTIONDURATION * time.Minute)
+  }
+
+  workChannel := make(chan msgAtomic)
+  jobType := "refresh"
+
+  for i := 0; i <= numBatches; i++ {
+    start := i*LIMIT
+    end := start+LIMIT
+    curr := start 
+
+    numRoutines := 0
+    for curr < min(end, numDocuments) { 
+      // Deferred cancel handled in atomic go-routine
+      childCtx, _ := context.WithCancel(cfg.Ctx)
+      go refreshAtomic(childCtx, newApps[curr], cfg.Col, workChannel)
+      numRoutines++
+      curr++
+    }
+
+    for completed := 0; completed < numRoutines; completed++ {
+      select {
+      case msg := <- workChannel:
+        if msg.err == nil {
+          numSuccess++
+        } else {
+          cfg.Trace.Error.Printf("Error process [%s] app %s - %s", jobType, msg.ID, msg.err.Error()) 
+          numErrors++
+        }
+      case <- timeout:
+        cfg.Trace.Info.Println("Process timeout signal received. Terminate.")
+        close(workChannel)
+        return
+      }
+      if cfg.LocalEnabled { bar.Increment() }
+    }
+  }
+
+  close(workChannel)
+  if bar != nil { bar.Finish() }
+
+  cfg.Trace.Info.Printf("%s execution REPORT:\n    success: %d\n    errors: %d", jobType, numSuccess, numErrors)
 }
 
 type executeAtomic func(ctx context.Context, app *db.App, cols *config.Collections, ch chan<-msgAtomic)  
